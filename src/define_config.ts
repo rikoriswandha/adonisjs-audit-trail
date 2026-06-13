@@ -1,5 +1,5 @@
 import { configProvider } from '@adonisjs/core'
-import type { ConfigProvider } from '@adonisjs/core/types'
+import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
 import type {
   AuditConfig,
   AuditEvent,
@@ -18,7 +18,11 @@ export type ResolvedAuditConfig<
   default: keyof KnownStores
   guarantee: GuaranteeMode
   stores: {
-    [K in keyof KnownStores]: KnownStores[K] extends ConfigProvider<infer A> ? A : KnownStores[K]
+    [K in keyof KnownStores]: KnownStores[K] extends ConfigProvider<infer A>
+      ? A
+      : KnownStores[K] extends (application: ApplicationService) => Promise<infer R>
+        ? R
+        : KnownStores[K]
   }
   redaction: {
     global: string[]
@@ -68,8 +72,10 @@ export function defineConfig<
       },
       retention: {
         default: config.retention?.default ?? '730 days',
-        perEvent: config.retention?.perEvent,
-        archive: config.retention?.archive,
+        ...(config.retention?.perEvent !== undefined
+          ? { perEvent: config.retention.perEvent }
+          : {}),
+        ...(config.retention?.archive !== undefined ? { archive: config.retention.archive } : {}),
       },
       chain: {
         enabled: config.chain?.enabled ?? true,
