@@ -11,7 +11,7 @@ import type {
 } from '../types.js'
 import type { LucidStoreOptions } from '../define_config.js'
 import { chainBatch, GENESIS, hashEntry } from '../core/hash_chain.js'
-import { AuditStoreError } from '../core/errors.js'
+import { parseDuration } from '../core/retention.js'
 
 interface Row {
   id: string
@@ -38,34 +38,6 @@ interface Row {
   hash: string
   prev_hash: string
   created_at: string
-}
-
-function parseDuration(duration: string): number {
-  const match = duration.match(/^(\d+)\s*(day|days|week|weeks|month|months|year|years)$/i)
-  if (!match) {
-    throw new AuditStoreError(`Invalid retention duration: ${duration}`)
-  }
-
-  const value = Number.parseInt(match[1], 10)
-  const unit = match[2].toLowerCase()
-
-  const msPerDay = 24 * 60 * 60 * 1000
-  switch (unit) {
-    case 'day':
-    case 'days':
-      return value * msPerDay
-    case 'week':
-    case 'weeks':
-      return value * 7 * msPerDay
-    case 'month':
-    case 'months':
-      return value * 30 * msPerDay
-    case 'year':
-    case 'years':
-      return value * 365 * msPerDay
-    default:
-      throw new AuditStoreError(`Invalid retention duration: ${duration}`)
-  }
 }
 
 function parseJson(value: string | null): Record<string, unknown> | null {
@@ -118,6 +90,13 @@ export default class LucidStore implements AuditStoreContract {
     this.#app = app
     this.#connection = opts.connection
     this.#table = opts.table ?? 'audits'
+  }
+
+  withConnection(connection: string): AuditStoreContract {
+    return new LucidStore(this.#app, {
+      connection,
+      table: this.#table,
+    })
   }
 
   async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
@@ -254,7 +233,11 @@ export default class LucidStore implements AuditStoreContract {
         .where('stream', stream)
         .groupBy('event')) as { event: string }[]
 
-      for (const { event } of eventTypes) {
+      const filteredEventTypes = policy.eventFilter
+        ? eventTypes.filter(({ event }) => event === policy.eventFilter)
+        : eventTypes
+
+      for (const { event } of filteredEventTypes) {
         const duration = policy.perEvent?.[event] ?? policy.default
         const cutoff = new Date(now - parseDuration(duration)).toISOString()
 
@@ -268,28 +251,53 @@ export default class LucidStore implements AuditStoreContract {
 
         const headSeq = headRows[0]?.seq
 
-        let query = db
+        let candidateQuery = db
           .query()
+          .select('id', 'seq', 'created_at')
           .from(this.#table)
           .where('stream', stream)
           .andWhere('event', event)
           .andWhere('created_at', '<', cutoff)
 
         if (headSeq !== undefined) {
-          query = query.andWhere('seq', '<', headSeq)
+          candidateQuery = candidateQuery.andWhere('seq', '<', headSeq)
+        }
+
+        const candidates = (await candidateQuery.orderBy('seq', 'asc')) as {
+          id: string
+          seq: number
+          created_at: string
+        }[]
+
+        const count = candidates.length
+
+        if (count === 0) {
+          continue
         }
 
         if (policy.dryRun) {
-          const countResult = (await query.count('* as count')) as { count: number | string }[]
-          const count = Number(countResult[0]?.count ?? 0)
           totalPruned += count
           perEvent[event] = (perEvent[event] ?? 0) + count
           continue
         }
 
-        const result = Number((await query.del()) as unknown)
-        totalPruned += result
-        perEvent[event] = (perEvent[event] ?? 0) + result
+        if (policy.archive) {
+          await policy.archive({
+            event,
+            stream,
+            fromSeq: candidates[0].seq,
+            toSeq: candidates[count - 1].seq,
+            count,
+            fromCreatedAt: candidates[0].created_at,
+            toCreatedAt: candidates[count - 1].created_at,
+          })
+        }
+
+        const ids = candidates.map((row) => row.id)
+        await db.query().from(this.#table).whereIn('id', ids).del()
+
+        totalPruned += count
+        perEvent[event] = (perEvent[event] ?? 0) + count
       }
     }
 

@@ -1,6 +1,9 @@
 import type { ApplicationService } from '@adonisjs/core/types'
 import type { QueryClientContract } from '@adonisjs/lucid/types/database'
 import type { AuditEvent, AuditStoreContract } from '../types.js'
+import { AuditOutboxPayloadError } from './errors.js'
+
+const DEFAULT_STALE_CLAIM_MS = 5 * 60 * 1000
 
 interface OutboxRow {
   id: string | number
@@ -27,9 +30,8 @@ function normalizePayload(payload: unknown): AuditEvent[] {
   if (Array.isArray(value)) {
     return value.filter(isAuditEvent)
   }
-
   if (!isRecord(value)) {
-    throw new Error('Invalid audit outbox payload')
+    throw new AuditOutboxPayloadError()
   }
 
   if (Array.isArray(value.events)) {
@@ -44,16 +46,20 @@ function normalizePayload(payload: unknown): AuditEvent[] {
     return [value]
   }
 
-  throw new Error('Invalid audit outbox payload')
+  throw new AuditOutboxPayloadError()
 }
 
 export default class AuditOutboxDrainer {
   #timer: ReturnType<typeof setInterval> | null = null
+  #staleClaimMs: number
 
   constructor(
     protected app: ApplicationService,
-    protected store: AuditStoreContract
-  ) {}
+    protected store: AuditStoreContract,
+    staleClaimMs: number = DEFAULT_STALE_CLAIM_MS
+  ) {
+    this.#staleClaimMs = staleClaimMs
+  }
 
   start(intervalMs = 1000): void {
     if (this.#timer) return
@@ -75,24 +81,27 @@ export default class AuditOutboxDrainer {
       return 0
     }
 
+    const now = new Date()
+    const staleHorizon = new Date(now.getTime() - this.#staleClaimMs).toISOString()
+
     const rows = (await db
       .query()
       .from('audit_outbox')
       .whereNull('processed_at')
+      .andWhere((builder) => {
+        void builder.whereNull('claimed_at').orWhere('claimed_at', '<', staleHorizon)
+      })
       .orderBy('id', 'asc')
       .limit(limit)) as OutboxRow[]
 
     let processed = 0
 
     for (const row of rows) {
-      const now = new Date().toISOString()
-      const attempts = Number(row.attempts ?? 0) + 1
-
-      await db.query().from('audit_outbox').where('id', row.id).update({
-        claimed_at: now,
-        attempts,
-        updated_at: now,
-      })
+      const claimedAt = now.toISOString()
+      const claimed = await this.#claim(db, row, claimedAt)
+      if (!claimed) {
+        continue
+      }
 
       try {
         const events = normalizePayload(row.payload)
@@ -115,6 +124,26 @@ export default class AuditOutboxDrainer {
     }
 
     return processed
+  }
+
+  async #claim(db: QueryClientContract, row: OutboxRow, claimedAt: string): Promise<boolean> {
+    const staleHorizon = new Date(new Date(claimedAt).getTime() - this.#staleClaimMs).toISOString()
+    const attempts = Number(row.attempts ?? 0) + 1
+    const affected = await db
+      .query()
+      .from('audit_outbox')
+      .where('id', row.id)
+      .whereNull('processed_at')
+      .andWhere((builder) => {
+        void builder.whereNull('claimed_at').orWhere('claimed_at', '<', staleHorizon)
+      })
+      .update({
+        claimed_at: claimedAt,
+        attempts,
+        updated_at: claimedAt,
+      })
+
+    return Number(affected) > 0
   }
 
   async #db(): Promise<QueryClientContract> {

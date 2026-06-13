@@ -4,8 +4,8 @@ import type StoreManager from '../stores/store_manager.js'
 import type AuditPipeline from '../core/pipeline.js'
 import type { AssembleConfig, AssembleInput } from '../core/assembler.js'
 import { assembleEvent } from '../core/assembler.js'
+import { AuditDroppedError } from '../core/errors.js'
 import LogBuilder from './log_builder.js'
-
 export interface AuditServiceConfig {
   assemble: AssembleConfig
   context: typeof AuditContext
@@ -37,19 +37,27 @@ export default class AuditService {
 
   async emitLog(builder: LogBuilder): Promise<void> {
     const event = await this.#assembleBuilderEvent(builder)
-    this.pipeline.enqueue(event)
+    const enqueued = this.pipeline.enqueue(event)
 
-    if (this.config.guarantee === 'request-coupled') {
+    if (!enqueued && this.config.guarantee !== 'best-effort') {
+      throw new AuditDroppedError()
+    }
+
+    if (enqueued && this.config.guarantee === 'request-coupled') {
       await this.pipeline.requestCoupledFlush([event.id])
     }
   }
 
   async emitLogSync(builder: LogBuilder, timeoutMs?: number): Promise<void> {
     const event = await this.#assembleBuilderEvent(builder)
-    this.pipeline.enqueue(event)
+    const enqueued = this.pipeline.enqueue(event)
+
+    if (!enqueued) {
+      throw new AuditDroppedError()
+    }
+
     await this.pipeline.requestCoupledFlush([event.id], timeoutMs)
   }
-
   async #assembleBuilderEvent(builder: LogBuilder): Promise<AuditEvent> {
     const context = this.config.context.get() ?? {}
     const input: AssembleInput = {

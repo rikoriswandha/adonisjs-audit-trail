@@ -18,9 +18,9 @@ export interface AssembleConfig {
   payloadMaxBytes: number
   streamBy: 'global' | 'tenant' | ((event: AuditEvent) => string)
   tenantId?: string | null
+  environment?: string
   crypto?: { encrypt: (event: AuditEvent) => Promise<AuditEvent> }
 }
-
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
@@ -52,30 +52,30 @@ function resolveStream(
   return config.streamBy(partialEvent)
 }
 
-async function resolveActor(context: AuditContextStore): Promise<AuditActor> {
+async function resolveActor(context: AuditContextStore, environment?: string): Promise<AuditActor> {
   if (!context.actor) {
-    return { type: 'system', id: null }
+    return { type: environment === 'console' ? 'cli' : 'system', id: null }
   }
 
   if (typeof context.actor === 'function') {
     const actor = await context.actor()
-    return actor ?? { type: 'system', id: null }
+    return actor ?? { type: environment === 'console' ? 'cli' : 'system', id: null }
   }
 
   return context.actor
 }
 
 function maybeTruncate(
-  newValues: Record<string, unknown> | null,
+  values: Record<string, unknown> | null,
   payloadMaxBytes: number
 ): Record<string, unknown> | null {
-  if (newValues === null) {
+  if (values === null) {
     return null
   }
 
-  const serialized = JSON.stringify(newValues)
+  const serialized = JSON.stringify(values)
   if (Buffer.byteLength(serialized, 'utf8') <= payloadMaxBytes) {
-    return newValues
+    return values
   }
 
   return {
@@ -83,15 +83,16 @@ function maybeTruncate(
     _sha256: sha256(serialized),
   }
 }
-
 export async function assembleEvent(
   input: AssembleInput,
   context: AuditContextStore,
   config: AssembleConfig
 ): Promise<AuditEvent> {
-  const actor = input.actor ?? (await resolveActor(context))
+  const actor = input.actor ?? (await resolveActor(context, config.environment))
   const tenantId = context.tenantId ?? config.tenantId ?? null
+  const oldValues = maybeTruncate(input.oldValues ?? null, config.payloadMaxBytes)
   const newValues = maybeTruncate(input.newValues ?? null, config.payloadMaxBytes)
+  const metadata = maybeTruncate(input.metadata ?? null, config.payloadMaxBytes)
 
   let event: AuditEvent = {
     id: uuidv7(),
@@ -99,9 +100,9 @@ export async function assembleEvent(
     stream: resolveStream(input, context, config),
     auditableType: input.auditableType ?? null,
     auditableId: input.auditableId ?? null,
-    oldValues: input.oldValues ?? null,
+    oldValues,
     newValues,
-    metadata: input.metadata ?? null,
+    metadata,
     actor,
     tenantId,
     requestId: context.requestId ?? null,

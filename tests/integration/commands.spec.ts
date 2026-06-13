@@ -10,6 +10,7 @@ import { runMigrations } from '../helpers/migrate.js'
 import { withDatabases } from '../helpers/matrix.js'
 import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
+import type { RetentionSegment } from '../../src/types.js'
 import { auditContext } from '../../src/audit_context.js'
 import AuditStats from '../../commands/audit_stats.js'
 import AuditVerify from '../../commands/audit_verify.js'
@@ -178,6 +179,38 @@ withDatabases('Audit commands', (group, dialect) => {
 
     assert.equal(command.exitCode, 0)
     assert.equal(beforeCount[0].$extras.count, afterCount[0].$extras.count)
+  })
+
+  test('audit:prune archives segments before deleting old rows', async ({ assert }) => {
+    const archived: unknown[] = []
+    await cleanupTestApp(app)
+    app = await createCommandApp(dialect, {
+      retention: {
+        default: '1 day',
+        archive: async (segment: RetentionSegment) => {
+          archived.push(segment)
+        },
+      },
+    })
+
+    const audit = (await app.container.make('audit')) as AuditService
+    await audit.log('old.event').commitSync()
+    await audit.log('new.event').commitSync()
+
+    const db = await app.container.make('lucid.db')
+    await db
+      .connection()
+      .query()
+      .from('audits')
+      .where('event', 'old.event')
+      .update({ created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() })
+
+    const command = await runCommand(app, AuditPrune)
+
+    assert.equal(command.exitCode, 0)
+    assert.lengthOf(archived, 1)
+    assert.isNull(await Audit.query().where('event', 'old.event').first())
+    assert.isNotNull(await Audit.query().where('event', 'new.event').first())
   })
 
   test('audit:replay-outbox drains pending rows', async ({ assert }) => {

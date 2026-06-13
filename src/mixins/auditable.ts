@@ -7,6 +7,7 @@ import type { AuditEvent, AuditableModelConfig, AuditRuntimeEvents } from '../ty
 import type { ResolvedAuditConfig } from '../define_config.js'
 import { assembleEvent } from '../core/assembler.js'
 import { createRedactor } from '../core/redactor.js'
+import { AuditPipelineRejectedError } from '../core/errors.js'
 import { auditContext } from '../audit_context.js'
 import Audit from '../models/audit.js'
 
@@ -157,7 +158,7 @@ async function enqueueEvent(event: AuditEvent): Promise<void> {
   const pipeline = await app.container.make('audit.pipeline')
   const accepted = pipeline.enqueue(event)
   if (!accepted) {
-    throw new Error('Audit event was not accepted by the pipeline')
+    throw new AuditPipelineRejectedError()
   }
 }
 

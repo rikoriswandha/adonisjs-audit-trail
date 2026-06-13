@@ -7,8 +7,9 @@ import type {
   ResolvedRetentionPolicy,
   VerifyReport,
 } from '../types.js'
-import { chainBatch, GENESIS } from '../core/hash_chain.js'
+import { chainBatch, GENESIS, verifyChain } from '../core/hash_chain.js'
 import { canonicalJson } from '../core/canonical_json.js'
+import { parseDuration } from '../core/retention.js'
 import { AuditStoreError } from '../core/errors.js'
 
 export interface HttpStoreOptions {
@@ -33,6 +34,7 @@ export default class HttpStore implements AuditStoreContract {
   readonly #signature?: HttpStoreOptions['signature']
   readonly #idempotencyHeader: string
   readonly #heads: Map<string, HeadState>
+  readonly #logs: Map<string, ChainedAuditEvent[]>
 
   constructor(options: HttpStoreOptions) {
     if (!options.url) {
@@ -44,6 +46,7 @@ export default class HttpStore implements AuditStoreContract {
     this.#signature = options.signature
     this.#idempotencyHeader = options.idempotencyHeader ?? 'X-Idempotency-Key'
     this.#heads = new Map()
+    this.#logs = new Map()
   }
 
   async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
@@ -51,11 +54,12 @@ export default class HttpStore implements AuditStoreContract {
 
     const grouped = this.#groupByStream(batch)
     const allChained: ChainedAuditEvent[] = []
+    const newHeads = new Map<string, HeadState>()
 
     for (const [stream, events] of grouped) {
       const head = await this.head(stream)
       const chained = chainBatch(events, head)
-      this.#heads.set(stream, {
+      newHeads.set(stream, {
         seq: chained[chained.length - 1]!.seq,
         hash: chained[chained.length - 1]!.hash,
       })
@@ -63,6 +67,17 @@ export default class HttpStore implements AuditStoreContract {
     }
 
     await this.#post(allChained)
+
+    for (const event of allChained) {
+      const existing = this.#logs.get(event.stream) ?? []
+      existing.push(event)
+      this.#logs.set(event.stream, existing)
+    }
+
+    for (const [stream, head] of newHeads) {
+      this.#heads.set(stream, head)
+    }
+
     return allChained
   }
 
@@ -71,14 +86,75 @@ export default class HttpStore implements AuditStoreContract {
   }
 
   async *verify(
-    _stream: string,
-    _range?: { fromSeq?: number; toSeq?: number }
+    stream: string,
+    range?: { fromSeq?: number; toSeq?: number }
   ): AsyncGenerator<VerifyReport> {
-    yield { stream: _stream, valid: true, checkedCount: 0 }
+    const rows = this.#logs.get(stream) ?? []
+    const filtered = rows.filter((row) => {
+      if (range?.fromSeq !== undefined && row.seq < range.fromSeq) return false
+      if (range?.toSeq !== undefined && row.seq > range.toSeq) return false
+      return true
+    })
+
+    let report: VerifyReport | undefined
+    for await (const r of verifyChain(toAsyncIterable(filtered))) {
+      report = r
+      yield r
+    }
+
+    if (!report) {
+      yield { stream, valid: true, checkedCount: 0 }
+    }
   }
 
-  async prune(_policy: ResolvedRetentionPolicy): Promise<PruneReport> {
-    return { streams: [], totalPruned: 0, perEvent: {} }
+  async prune(policy: ResolvedRetentionPolicy): Promise<PruneReport> {
+    const now = Date.now()
+    let totalPruned = 0
+    const perEvent: Record<string, number> = {}
+    const streams: string[] = []
+
+    for (const [stream, rows] of this.#logs) {
+      if (rows.length === 0) continue
+
+      streams.push(stream)
+      const headSeq = rows[rows.length - 1]!.seq
+      const retained: ChainedAuditEvent[] = []
+      const pruned: ChainedAuditEvent[] = []
+
+      for (const row of rows) {
+        const matchesFilter = policy.eventFilter === undefined || row.event === policy.eventFilter
+        const duration = policy.perEvent?.[row.event] ?? policy.default
+        const cutoff = new Date(now - parseDuration(duration)).toISOString()
+        const isHead = row.seq === headSeq
+
+        if (!matchesFilter || isHead || row.createdAt >= cutoff) {
+          retained.push(row)
+          continue
+        }
+
+        pruned.push(row)
+        totalPruned++
+        perEvent[row.event] = (perEvent[row.event] ?? 0) + 1
+      }
+
+      if (pruned.length > 0 && policy.archive && !policy.dryRun) {
+        await policy.archive({
+          event: policy.eventFilter ?? pruned[0]!.event,
+          stream,
+          fromSeq: pruned[0]!.seq,
+          toSeq: pruned[pruned.length - 1]!.seq,
+          count: pruned.length,
+          fromCreatedAt: pruned[0]!.createdAt,
+          toCreatedAt: pruned[pruned.length - 1]!.createdAt,
+        })
+      }
+
+      if (!policy.dryRun) {
+        this.#logs.set(stream, retained)
+      }
+    }
+
+    return { streams, totalPruned, perEvent }
   }
 
   #groupByStream(batch: AuditEvent[]): Map<string, AuditEvent[]> {
@@ -134,25 +210,16 @@ export default class HttpStore implements AuditStoreContract {
         `HttpStore collector returned ${response.status}: ${text.slice(0, 200)}`
       )
     }
-
-    const json = await response.json().catch(() => null)
-    if (this.#isHeadResponse(json)) {
-      this.#heads.set(json.stream, { seq: json.seq, hash: json.hash })
-    }
   }
 
   #sign(payload: string, secret: string): string {
     return createHmac('sha256', secret).update(payload).digest('hex')
   }
+}
 
-  #isHeadResponse(value: unknown): value is HeadState & { stream: string } {
-    return (
-      typeof value === 'object' &&
-      value !== null &&
-      typeof (value as Record<string, unknown>).stream === 'string' &&
-      typeof (value as Record<string, unknown>).seq === 'number' &&
-      typeof (value as Record<string, unknown>).hash === 'string'
-    )
+async function* toAsyncIterable<T>(items: T[]): AsyncGenerator<T> {
+  for (const item of items) {
+    yield item
   }
 }
 

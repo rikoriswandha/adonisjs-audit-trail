@@ -72,6 +72,7 @@ export default class AuditProvider {
         assemble: {
           payloadMaxBytes: config.payloadMaxBytes,
           streamBy: config.chain.streamBy,
+          environment: this.app.getEnvironment(),
           ...(crypto ? { crypto } : {}),
         },
         context: auditContext,

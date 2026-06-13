@@ -62,11 +62,9 @@ function runConcurrencyTests(): void {
       assert,
     }) => {
       const container = await startContainer('postgres')
-      if (!container) {
-        console.warn('Postgres container unavailable; skipping concurrency proof')
-        return
+      if (container === null) {
+        throw new Error('Postgres container is required for concurrency proof')
       }
-
       const [app1, app2] = await Promise.all([createApp(container), createApp(container)])
 
       try {
@@ -114,13 +112,10 @@ function runConcurrencyTests(): void {
       assert,
     }) => {
       const container = await startContainer('postgres')
-      if (!container) {
-        console.warn('Postgres container unavailable; skipping concurrency proof')
-        return
+      if (container === null) {
+        throw new Error('Postgres container is required for concurrency proof')
       }
-
       const [app1, app2] = await Promise.all([createApp(container), createApp(container)])
-
       try {
         const store1 = useStore(await app1.container.make('audit.manager'))
         const store2 = useStore(await app2.container.make('audit.manager'))

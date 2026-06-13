@@ -42,6 +42,11 @@ export interface AuditStoreContract {
   verify(stream: string, range?: { fromSeq?: number; toSeq?: number }): AsyncIterable<VerifyReport>
   prune(policy: ResolvedRetentionPolicy): Promise<PruneReport>
   query?(filters: AuditQueryFilters): Promise<ChainedAuditEvent[]>
+  /**
+   * Optional support for selecting a named connection for an operation.
+   * Returns a store instance bound to the given connection.
+   */
+  withConnection?(connection: string): AuditStoreContract
 }
 
 // --- Config ---
@@ -204,6 +209,7 @@ export interface RetentionPolicy {
 export interface ResolvedRetentionPolicy extends RetentionPolicy {
   dryRun?: boolean
   archive?: (segment: RetentionSegment) => Promise<void>
+  eventFilter?: string
 }
 
 export interface RetentionSegment {

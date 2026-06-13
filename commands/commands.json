@@ -50,6 +50,11 @@
           "name": "dry-run",
           "type": "boolean",
           "description": "Run without deleting (dry run)"
+        },
+        {
+          "name": "connection",
+          "type": "string",
+          "description": "Store connection name (for stores that support it)"
         }
       ],
       "args": [],

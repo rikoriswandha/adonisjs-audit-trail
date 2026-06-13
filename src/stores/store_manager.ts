@@ -1,3 +1,4 @@
+import { AuditStoreConnectionError, AuditStoreError } from '../core/errors.js'
 import type { AuditEvent, AuditStoreContract } from '../types.js'
 import type { ResolvedAuditConfig } from '../define_config.js'
 
@@ -10,11 +11,24 @@ export default class StoreManager {
     this.#default = String(config.default)
   }
 
-  use(name?: string): AuditStoreContract {
+  use(name?: string, connection?: string): AuditStoreContract {
     const storeName = name ?? this.#default
     const store = this.#stores[storeName]
-    if (!store) throw new Error(`Audit store "${storeName}" is not configured`)
-    return store
+    if (!store) {
+      throw new AuditStoreError(`Audit store "${storeName}" is not configured`)
+    }
+
+    if (connection === undefined) {
+      return store
+    }
+
+    if (typeof store.withConnection === 'function') {
+      return store.withConnection(connection)
+    }
+
+    throw new AuditStoreConnectionError(
+      `Audit store "${storeName}" does not support connection selection`
+    )
   }
 
   route(event: AuditEvent): { name: string; store: AuditStoreContract } {

@@ -1,6 +1,6 @@
 import { BaseCommand, flags } from '@adonisjs/core/ace'
 import type { ResolvedAuditConfig } from '../src/define_config.js'
-
+import type { ResolvedRetentionPolicy } from '../src/types.js'
 export default class AuditPrune extends BaseCommand {
   static commandName = 'audit:prune'
   static description = 'Prune audit events according to retention policy'
@@ -12,16 +12,22 @@ export default class AuditPrune extends BaseCommand {
   @flags.boolean({ description: 'Run without deleting (dry run)' })
   declare dryRun: boolean | undefined
 
+  @flags.string({ description: 'Store connection name (for stores that support it)' })
+  declare connection: string | undefined
+
   async run() {
     const config = (await this.app.container.make('audit.config')) as ResolvedAuditConfig
     const manager = await this.app.container.make('audit.manager')
-    const store = manager.use()
+    const store = manager.use(undefined, this.connection)
 
-    const policy = {
+    const policy: ResolvedRetentionPolicy = {
       default: config.retention.default,
       ...(config.retention.perEvent !== undefined ? { perEvent: config.retention.perEvent } : {}),
       ...(this.event !== undefined ? { eventFilter: this.event } : {}),
       dryRun: this.dryRun === true,
+      ...(config.retention.archive !== undefined && this.dryRun !== true
+        ? { archive: config.retention.archive }
+        : {}),
     }
 
     const report = await store.prune(policy)

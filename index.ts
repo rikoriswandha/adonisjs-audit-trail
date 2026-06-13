@@ -7,6 +7,10 @@
 |
 */
 
+import { fileURLToPath } from 'node:url'
+
+export const stubsRoot = fileURLToPath(new URL('./stubs/', import.meta.url))
+
 export { configure } from './configure.ts'
 export { defineConfig, stores } from './src/define_config.js'
 

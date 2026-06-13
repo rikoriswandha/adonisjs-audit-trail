@@ -42,65 +42,51 @@ export async function startContainer(dialect: DbDialect): Promise<ContainerHandl
   return startMysql()
 }
 
-async function startPostgres(): Promise<ContainerHandle | null> {
-  let container: StartedTestContainer | undefined
-  try {
-    container = await new GenericContainer('postgres:16')
-      .withEnvironment({
-        POSTGRES_USER: 'audit',
-        POSTGRES_PASSWORD: 'audit',
-        POSTGRES_DB: 'audit',
-      })
-      .withExposedPorts(5432)
-      .withStartupTimeout(120_000)
-      .start()
-
-    return buildHandle('postgres', container, {
-      client: 'pg',
-      connection: {
-        host: container.getHost(),
-        port: container.getMappedPort(5432),
-        user: 'audit',
-        password: 'audit',
-        database: 'audit',
-      },
+async function startPostgres(): Promise<ContainerHandle> {
+  const container = await new GenericContainer('postgres:16')
+    .withEnvironment({
+      POSTGRES_USER: 'audit',
+      POSTGRES_PASSWORD: 'audit',
+      POSTGRES_DB: 'audit',
     })
-  } catch (error) {
-    logContainerError('postgres', error)
-    await container?.stop()
-    return null
-  }
+    .withExposedPorts(5432)
+    .withStartupTimeout(120_000)
+    .start()
+
+  return buildHandle('postgres', container, {
+    client: 'pg',
+    connection: {
+      host: container.getHost(),
+      port: container.getMappedPort(5432),
+      user: 'audit',
+      password: 'audit',
+      database: 'audit',
+    },
+  })
 }
 
-async function startMysql(): Promise<ContainerHandle | null> {
-  let container: StartedTestContainer | undefined
-  try {
-    container = await new GenericContainer('mysql:8')
-      .withEnvironment({
-        MYSQL_ROOT_PASSWORD: 'audit',
-        MYSQL_DATABASE: 'audit',
-        MYSQL_USER: 'audit',
-        MYSQL_PASSWORD: 'audit',
-      })
-      .withExposedPorts(3306)
-      .withStartupTimeout(120_000)
-      .start()
-
-    return buildHandle('mysql', container, {
-      client: 'mysql2',
-      connection: {
-        host: container.getHost(),
-        port: container.getMappedPort(3306),
-        user: 'audit',
-        password: 'audit',
-        database: 'audit',
-      },
+async function startMysql(): Promise<ContainerHandle> {
+  const container = await new GenericContainer('mysql:8')
+    .withEnvironment({
+      MYSQL_ROOT_PASSWORD: 'audit',
+      MYSQL_DATABASE: 'audit',
+      MYSQL_USER: 'audit',
+      MYSQL_PASSWORD: 'audit',
     })
-  } catch (error) {
-    logContainerError('mysql', error)
-    await container?.stop()
-    return null
-  }
+    .withExposedPorts(3306)
+    .withStartupTimeout(120_000)
+    .start()
+
+  return buildHandle('mysql', container, {
+    client: 'mysql2',
+    connection: {
+      host: container.getHost(),
+      port: container.getMappedPort(3306),
+      user: 'audit',
+      password: 'audit',
+      database: 'audit',
+    },
+  })
 }
 
 function buildHandle(
@@ -118,9 +104,4 @@ function buildHandle(
       await container.stop()
     },
   }
-}
-
-function logContainerError(dialect: string, error: unknown): void {
-  const message = error instanceof Error ? error.message : String(error)
-  console.warn(`Failed to start ${dialect} container: ${message}`)
 }

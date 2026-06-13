@@ -1,3 +1,4 @@
+import { AuditAnchorError } from './errors.js'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { ChainHead } from '../types.js'
@@ -92,7 +93,9 @@ export async function httpPostPublisher(
     })
 
     if (!response.ok) {
-      throw new Error(`Anchor HTTP POST failed: ${response.status} ${await response.text()}`)
+      throw new AuditAnchorError(
+        `Anchor HTTP POST failed: ${response.status} ${await response.text()}`
+      )
     }
   }
 }

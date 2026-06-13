@@ -3,6 +3,7 @@ import { Encryption } from '@adonisjs/core/encryption'
 import { AES256GCM } from '@adonisjs/core/encryption/drivers/aes_256_gcm'
 import type { ApplicationService } from '@adonisjs/core/types'
 import type { AuditEvent, CryptoShreddingConfig, SubjectKeyStore } from '../types.js'
+import { AuditConfigurationError } from './errors.js'
 
 const ENCRYPTED_MARKER = '_encrypted'
 const CIPHERTEXT_KEY = 'ciphertext'
@@ -61,7 +62,7 @@ export class LucidSubjectKeyStore implements SubjectKeyStore {
 
   async #db() {
     if (!this.#app) {
-      throw new Error('LucidSubjectKeyStore requires an application instance')
+      throw new AuditConfigurationError('LucidSubjectKeyStore requires an application instance')
     }
     return this.#connection
       ? await this.#app.container.make(`lucid.${this.#connection}`)

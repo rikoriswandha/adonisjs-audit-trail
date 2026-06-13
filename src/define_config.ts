@@ -2,6 +2,7 @@ import { configProvider } from '@adonisjs/core'
 import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
 import type { HttpContext } from '@adonisjs/core/http'
 import type { Writable } from 'node:stream'
+import { AuditConfigurationError, AuditPeerDependencyError } from './core/errors.js'
 import type {
   AnchorConfig,
   AuditConfig,
@@ -93,7 +94,9 @@ export function defineConfig<
 
     const defaultStore = (config.default ?? 'lucid') as keyof KnownStores
     if (!Object.hasOwn(config.stores, defaultStore)) {
-      throw new Error(`Default audit store "${String(defaultStore)}" is not configured`)
+      throw new AuditConfigurationError(
+        `Default audit store "${String(defaultStore)}" is not configured`
+      )
     }
 
     return {
@@ -141,7 +144,7 @@ async function resolveStoreConfig(
 
   const resolved = await configProvider.resolve(app, storeConfig)
   if (resolved === null) {
-    throw new Error('Invalid config provider for audit store')
+    throw new AuditConfigurationError('Invalid config provider for audit store')
   }
 
   return resolved as AuditStoreContract
@@ -189,7 +192,7 @@ export const stores = {
   lucid: (opts: LucidStoreOptions = {}) =>
     configProvider.create(async (app: ApplicationService) => {
       const { default: LucidStore } = await import('./stores/lucid_store.js').catch(() => {
-        throw new Error(
+        throw new AuditPeerDependencyError(
           '@adonisjs/lucid is required for the lucid store. Install it as a peer dependency.'
         )
       })
