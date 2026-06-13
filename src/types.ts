@@ -87,6 +87,7 @@ export interface AuditConfig<
   payloadMaxBytes?: number
 
   tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
+  captureAuthEvents?: boolean
 }
 
 // --- Module augmentation point ---
@@ -151,10 +152,17 @@ export interface AuditDeadLetterEvent {
   error: unknown
 }
 
+export interface AuditErrorEvent {
+  event: AuditEvent | null
+  error: unknown
+  source: 'model' | 'domain' | 'auth'
+}
+
 export interface AuditRuntimeEvents {
   'audit:flushed': AuditFlushedEvent
   'audit:dropped': AuditDroppedEvent
   'audit:dead_letter': AuditDeadLetterEvent
+  'audit:error': AuditErrorEvent
 }
 
 declare module '@adonisjs/core/types' {

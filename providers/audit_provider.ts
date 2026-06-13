@@ -1,4 +1,5 @@
 import type { ApplicationService } from '@adonisjs/core/types'
+import AuthListener from '../src/listeners/auth_listener.js'
 import '../src/types/container_bindings.js'
 import StoreManager from '../src/stores/store_manager.js'
 import AuditPipeline from '../src/core/pipeline.js'
@@ -59,16 +60,22 @@ export default class AuditProvider {
           streamBy: config.chain.streamBy,
         },
         context: auditContext,
+        guarantee: config.guarantee,
       })
     })
   }
 
-  async boot() {
-    // M3: wire Lucid hooks helper, auth listener
-  }
+  async boot() {}
 
   async start() {
     const config = await this.app.container.make('audit.config')
+    if (config.captureAuthEvents) {
+      const audit = await this.app.container.make('audit')
+      const emitter = await this.app.container.make('emitter')
+      this.#authListener = new AuthListener(emitter, audit)
+      this.#authListener.attach()
+    }
+
     const pipeline = await this.app.container.make('audit.pipeline')
     pipeline.start()
 
@@ -80,8 +87,10 @@ export default class AuditProvider {
   }
 
   async shutdown() {
+    this.#authListener?.detach()
     this.#outboxDrainer?.stop()
     const pipeline = await this.app.container.make('audit.pipeline')
     await pipeline.shutdown(5000)
   }
+  #authListener?: AuthListener
 }

@@ -63,6 +63,7 @@ type TestAuditConfig = {
   chain: Required<NonNullable<AuditConfig['chain']>>
   queue: Required<NonNullable<AuditConfig['queue']>>
   payloadMaxBytes: number
+  captureAuthEvents: boolean
 }
 
 const defaultAuditConfig = {
@@ -74,6 +75,7 @@ const defaultAuditConfig = {
   chain: { enabled: true, streamBy: 'global' },
   queue: { maxBatchSize: 200, flushIntervalMs: 5, capacity: 10_000, overflow: 'dropOldest' },
   payloadMaxBytes: 32_768,
+  captureAuthEvents: true,
 } satisfies TestAuditConfig
 
 function resolveAuditConfig(auditConfig: Partial<AuditConfig>): TestAuditConfig {

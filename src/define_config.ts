@@ -43,6 +43,7 @@ export type ResolvedAuditConfig<
   }
   payloadMaxBytes: number
   tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
+  captureAuthEvents: boolean
 }
 
 export function defineConfig<
@@ -96,6 +97,7 @@ export function defineConfig<
       },
       payloadMaxBytes: config.payloadMaxBytes ?? 32_768,
       tenantResolver: config.tenantResolver,
+      captureAuthEvents: config.captureAuthEvents ?? true,
     }
   })
 }

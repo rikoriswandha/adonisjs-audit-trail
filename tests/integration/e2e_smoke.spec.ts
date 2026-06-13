@@ -33,7 +33,7 @@ test.group('E2E smoke', (group) => {
   })
 
   test('log builder emits chained audit row', async ({ assert }) => {
-    const post = await Post.create({ title: 'Hello', body: 'World' })
+    const post = await Post.createQuietly({ title: 'Hello', body: 'World' })
     const audit = (await app.container.make('audit')) as AuditService
 
     await auditContext.run(

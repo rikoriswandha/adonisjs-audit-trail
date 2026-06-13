@@ -1,0 +1,80 @@
+import { test } from '@japa/runner'
+import type { ApplicationService } from '@adonisjs/core/types'
+import Audit from '../../src/models/audit.js'
+import { createTestApp, cleanupTestApp } from '../helpers/app.js'
+import { runMigrations } from '../helpers/migrate.js'
+import { Post } from '../helpers/models.js'
+
+async function createLucidApp(auditConfig = {}) {
+  const app = await createTestApp({
+    default: 'lucid',
+    ...auditConfig,
+    stores: {
+      lucid: async (application: ApplicationService) => {
+        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+        return new LucidStore(application, {})
+      },
+    },
+  })
+  await runMigrations(app)
+  return app
+}
+
+async function waitForAudits(expected: number): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const rows = await Audit.query()
+    const count = rows.length
+    if (count >= expected) return
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+test.group('Auditable transactions', () => {
+  test('rolled-back transactions do not enqueue audit rows', async ({ assert }) => {
+    const app = await createLucidApp()
+
+    try {
+      const db = await app.container.make('lucid.db')
+      await db.transaction(async (trx) => {
+        const post = new Post()
+        post.title = 'Rollback'
+        post.body = null
+        post.useTransaction(trx)
+        await post.save()
+        throw new Error('rollback')
+      })
+    } catch (error) {
+      assert.instanceOf(error, Error)
+    }
+
+    await waitForAudits(1)
+    assert.lengthOf(await Audit.query(), 0)
+    await cleanupTestApp(app)
+  })
+
+  test('transactional-outbox co-commits and drains model audit events', async ({ assert }) => {
+    const app = await createLucidApp({ guarantee: 'transactional-outbox' })
+
+    try {
+      const db = await app.container.make('lucid.db')
+      await db.transaction(async (trx) => {
+        const post = new Post()
+        post.title = 'Outbox'
+        post.body = null
+        post.useTransaction(trx)
+        await post.save()
+      })
+
+      const outboxRows = await db.query().from('audit_outbox').whereNull('processed_at')
+      assert.lengthOf(outboxRows, 1)
+
+      const drainer = await app.container.make('audit.outbox_drainer')
+      assert.equal(await drainer.drain(), 1)
+
+      const row = await Audit.query().where('event', 'model.created').firstOrFail()
+      assert.equal(row.newValues?.title, 'Outbox')
+    } finally {
+      await cleanupTestApp(app)
+    }
+  })
+})

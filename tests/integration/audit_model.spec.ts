@@ -63,7 +63,7 @@ test.group('Audit model scopes', (group) => {
   })
 
   test('forModel scopes by type and id', async ({ assert }) => {
-    const post = await Post.create({ title: 'Hello', body: null })
+    const post = await Post.createQuietly({ title: 'Hello', body: null })
     const store = useStore(await app.container.make('audit.manager'))
     await store.write([makeEvent({ auditableType: 'Post', auditableId: String(post.id) })])
     await store.write([makeEvent({ auditableType: 'Post', auditableId: '999' })])
