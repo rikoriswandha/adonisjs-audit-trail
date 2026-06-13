@@ -1,0 +1,92 @@
+{{{
+  exports({
+    to: app.configPath('audit.ts')
+  })
+}}}
+import { defineConfig, stores } from '@rikology/adonisjs-audit-trail'
+import env from '#start/env'
+
+export default defineConfig({
+  /**
+   * Default store used by the audit pipeline.
+   */
+  default: 'lucid',
+
+  /**
+   * Delivery guarantee mode.
+   * - 'best-effort': enqueue and flush asynchronously (default, fastest)
+   * - 'request-coupled': hold the response until the audit is durably written
+   * - 'transactional-outbox': write to an outbox table inside the business transaction
+   */
+  guarantee: 'best-effort',
+
+  /**
+   * Configured stores. The lucid store requires @adonisjs/lucid.
+   */
+  stores: {
+    lucid: stores.lucid({
+      connection: 'audit',
+      table: 'audits',
+      enforceImmutability: {{ immutability }},
+    }),
+  },
+
+  /**
+   * PII / sensitive field redaction.
+   */
+  redaction: {
+    global: ['password', 'passwordConfirmation', 'token', 'secret', '*.secret'],
+    mode: 'mask', // 'mask' | 'remove' | 'hash'
+    saltEnvVar: 'AUDIT_REDACTION_SALT',
+  },
+
+  /**
+   * Retention policies used by "node ace audit:prune".
+   */
+  retention: {
+    default: '730 days',
+    perEvent: {
+      'auth.login': '90 days',
+      'auth.login_failed': '30 days',
+    },
+    // archive: async (segment) => { /* push NDJSON to object storage */ },
+  },
+
+  /**
+   * Hash-chain configuration.
+   */
+  chain: {
+    enabled: true,
+    streamBy: '{{#multiTenant}}tenant{{/multiTenant}}{{^multiTenant}}global{{/multiTenant}}',
+  },
+
+  /**
+   * In-memory queue / flush settings.
+   */
+  queue: {
+    maxBatchSize: 200,
+    flushIntervalMs: 250,
+    capacity: 10_000,
+    overflow: 'dropOldest', // 'dropOldest' | 'dropNew' | 'block'
+  },
+
+  /**
+   * Max payload size for old/new values and metadata.
+   */
+  payloadMaxBytes: 32_768,
+
+  {{#multiTenant}}
+  /**
+   * Resolve the tenant id from the HTTP context.
+   * Adjust this to match your tenancy strategy (subdomain, header, auth, etc.).
+   */
+  tenantResolver(ctx) {
+    return ctx.request.header('x-tenant-id') ?? null
+  },
+  {{/multiTenant}}
+
+  /**
+   * Automatically capture auth login/logout events.
+   */
+  captureAuthEvents: true,
+})

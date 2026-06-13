@@ -1,0 +1,21 @@
+{{{
+  exports({
+    to: app.startPath('audit_events.ts')
+  })
+}}}
+import '@rikology/adonisjs-audit-trail/types'
+
+/**
+ * Declare your typed domain audit event names here. Once registered, the
+ * audit.log() facade will autocomplete them for you.
+ *
+ * Example:
+ *
+ * declare module '@rikology/adonisjs-audit-trail/types' {
+ *   interface AuditEvents {
+ *     'invoice.approved': true
+ *     'invoice.exported': true
+ *     'document.shared': true
+ *   }
+ * }
+ */

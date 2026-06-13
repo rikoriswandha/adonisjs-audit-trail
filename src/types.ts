@@ -175,6 +175,7 @@ export interface RetentionPolicy {
 }
 
 export interface ResolvedRetentionPolicy extends RetentionPolicy {
+  dryRun?: boolean
   archive?: (segment: RetentionSegment) => Promise<void>
 }
 

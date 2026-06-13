@@ -1,1 +1,93 @@
-{ "commands": [] }
+{
+  "commands": [
+    {
+      "commandName": "audit:verify",
+      "description": "Verify audit trail hash chain integrity",
+      "namespace": "audit",
+      "aliases": [],
+      "flags": [
+        {
+          "name": "stream",
+          "type": "string",
+          "description": "Stream to verify"
+        },
+        {
+          "name": "from-seq",
+          "type": "number",
+          "description": "Start sequence (inclusive)"
+        },
+        {
+          "name": "to-seq",
+          "type": "number",
+          "description": "End sequence (inclusive)"
+        },
+        {
+          "name": "json",
+          "type": "boolean",
+          "description": "Output JSON"
+        }
+      ],
+      "args": [],
+      "options": {},
+      "filePath": "./audit_verify.js"
+    },
+    {
+      "commandName": "audit:prune",
+      "description": "Prune audit events according to retention policy",
+      "namespace": "audit",
+      "aliases": [],
+      "flags": [
+        {
+          "name": "event",
+          "type": "string",
+          "description": "Event name to prune"
+        },
+        {
+          "name": "dry-run",
+          "type": "boolean",
+          "description": "Run without deleting (dry run)"
+        }
+      ],
+      "args": [],
+      "options": {},
+      "filePath": "./audit_prune.js"
+    },
+    {
+      "commandName": "audit:replay-outbox",
+      "description": "Replay pending transactional outbox events",
+      "namespace": "audit",
+      "aliases": [],
+      "flags": [
+        {
+          "name": "limit",
+          "type": "number",
+          "description": "Maximum events to replay"
+        }
+      ],
+      "args": [],
+      "options": {},
+      "filePath": "./audit_replay_outbox.js"
+    },
+    {
+      "commandName": "audit:stats",
+      "description": "Show audit pipeline and store statistics",
+      "namespace": "audit",
+      "aliases": [],
+      "flags": [
+        {
+          "name": "store",
+          "type": "string",
+          "description": "Store name"
+        },
+        {
+          "name": "stream",
+          "type": "string",
+          "description": "Stream name"
+        }
+      ],
+      "args": [],
+      "options": {},
+      "filePath": "./audit_stats.js"
+    }
+  ]
+}

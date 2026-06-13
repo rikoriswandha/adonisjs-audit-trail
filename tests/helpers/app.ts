@@ -135,6 +135,7 @@ export async function createTestApp(
           () => import('@adonisjs/lucid/database_provider'),
           () => import('../../providers/audit_provider.js'),
         ],
+        commands: [() => import('../../commands/main.js')],
       },
       config: {
         database: {

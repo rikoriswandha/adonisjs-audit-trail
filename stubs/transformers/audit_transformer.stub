@@ -1,0 +1,58 @@
+{{{
+  exports({
+    to: app.transformersPath('audit_transformer.ts')
+  })
+}}}
+import { BaseTransformer } from '@adonisjs/core/transformers'
+import Audit from '@rikology/adonisjs-audit-trail/models/audit'
+
+export default class AuditTransformer extends BaseTransformer<Audit> {
+  toObject() {
+    return {
+      id: this.resource.id,
+      seq: this.resource.seq,
+      stream: this.resource.stream,
+      event: this.resource.event,
+      humanizedEvent: this.#humanizeEvent(this.resource.event),
+      actor: {
+        type: this.resource.actorType,
+        id: this.resource.actorId,
+        label: this.resource.actorLabel,
+      },
+      auditable: {
+        type: this.resource.auditableType,
+        id: this.resource.auditableId,
+      },
+      diff: {
+        old: this.resource.oldValues,
+        new: this.resource.newValues,
+      },
+      metadata: this.resource.metadata,
+      context: {
+        tenantId: this.resource.tenantId,
+        requestId: this.resource.requestId,
+        correlationId: this.resource.correlationId,
+        ipAddress: this.resource.ipAddress,
+        userAgent: this.resource.userAgent,
+        url: this.resource.url,
+        httpMethod: this.resource.httpMethod,
+      },
+      tags: this.resource.tags,
+      integrity: {
+        hash: this.resource.hash,
+        prevHash: this.resource.prevHash,
+        schemaVersion: this.resource.schemaVersion,
+      },
+      createdAt: this.resource.createdAt,
+    }
+  }
+
+  #humanizeEvent(event: string): string {
+    return event
+      .replace(/\./g, ' ')
+      .replace(/_/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .toLowerCase()
+      .replace(/^./, (char) => char.toUpperCase())
+  }
+}

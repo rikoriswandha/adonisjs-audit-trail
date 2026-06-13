@@ -279,6 +279,14 @@ export default class LucidStore implements AuditStoreContract {
           query = query.andWhere('seq', '<', headSeq)
         }
 
+        if (policy.dryRun) {
+          const countResult = (await query.count('* as count')) as { count: number | string }[]
+          const count = Number(countResult[0]?.count ?? 0)
+          totalPruned += count
+          perEvent[event] = (perEvent[event] ?? 0) + count
+          continue
+        }
+
         const result = Number((await query.del()) as unknown)
         totalPruned += result
         perEvent[event] = (perEvent[event] ?? 0) + result
