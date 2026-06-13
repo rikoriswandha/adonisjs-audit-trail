@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file. The format is based on [Conventional Commits](https://www.conventionalcommits.org/) and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- Runnable AdonisJS demo app under `examples/demo`.
+
 ## 1.0.0
 
 ### Added

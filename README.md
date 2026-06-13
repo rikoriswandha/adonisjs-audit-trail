@@ -94,6 +94,11 @@ Exit code is non-zero when a chain break is detected, so it can be wired into CI
 - [Threat model](./docs/threat-model.md)
 - [Upgrade policy](./docs/upgrade-policy.md)
 
+
+## Demo app
+
+See [`examples/demo`](./examples/demo) for a runnable AdonisJS v7 API that shows the Lucid mixin, request context middleware, explicit domain events, redaction, and `audit:verify`.
+
 ## Benchmarks
 
 Run locally with:

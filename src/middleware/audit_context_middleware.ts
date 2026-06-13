@@ -1,8 +1,9 @@
 import type { HttpContext } from '@adonisjs/core/http'
+import type { ApplicationService } from '@adonisjs/core/types'
 import type { NextFn } from '@adonisjs/http-server/types'
 import { auditContext } from '../audit_context.js'
 import type { AuditActor } from '../types.js'
-import type { ApplicationService } from '@adonisjs/core/types'
+import app from '@adonisjs/core/services/app'
 
 interface AuthContext {
   auth: {
@@ -43,11 +44,15 @@ async function resolveActorFromAuth(ctx: HttpContext): Promise<AuditActor> {
 }
 
 export default class AuditContextMiddleware {
-  constructor(protected app?: ApplicationService) {}
+  #app?: ApplicationService
+
+  constructor(...args: [ApplicationService?]) {
+    this.#app = args[0]
+  }
 
   async handle(ctx: HttpContext, next: NextFn) {
-    const config = this.app ? await this.app.container.make('audit.config') : null
-    const tenantId = (await config?.tenantResolver?.(ctx)) ?? undefined
+    const config = await (this.#app ?? app).container.make('audit.config')
+    const tenantId = (await config.tenantResolver?.(ctx)) ?? undefined
 
     return auditContext.run(
       {
