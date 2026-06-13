@@ -95,8 +95,10 @@ test.group('defineConfig', function (group) {
     assert.equal(resolved.payloadMaxBytes, 32_768)
   })
 
-  test('stores helpers are config providers', async function ({ assert }) {
-    for (const [name, factory] of Object.entries(stores)) {
+  test('unimplemented store helpers throw', async function ({ assert }) {
+    const unimplemented = ['stream', 'http', 'fanout'] as const
+    for (const name of unimplemented) {
+      const factory = stores[name]
       const provider = factory({})
       await assert.rejects(
         async function () {
@@ -105,6 +107,13 @@ test.group('defineConfig', function (group) {
         new RegExp(`${name}Store not implemented yet`, 'i')
       )
     }
+  })
+
+  test('lucid store helper resolves a store', async function ({ assert }) {
+    const provider = stores.lucid({})
+    const resolved = await configProvider.resolve(app, provider)
+    assert.isDefined(resolved)
+    assert.equal(typeof (resolved as AuditStoreContract).write, 'function')
   })
 
   test('ResolvedAuditConfig shape is preserved', async function ({ expectTypeOf }) {

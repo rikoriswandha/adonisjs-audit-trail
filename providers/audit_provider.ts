@@ -1,38 +1,61 @@
 import type { ApplicationService } from '@adonisjs/core/types'
+import '../src/types/container_bindings.js'
 import StoreManager from '../src/stores/store_manager.js'
 import AuditPipeline from '../src/core/pipeline.js'
 import AuditService from '../src/services/audit.js'
+import { auditContext } from '../src/audit_context.js'
+import { createRedactor } from '../src/core/redactor.js'
 
 export default class AuditProvider {
   constructor(protected app: ApplicationService) {}
 
   register() {
     this.app.container.singleton('audit.manager', async () => {
-      const auditConfig = await this.app.container.make('audit.config')
-      return new StoreManager(auditConfig)
+      const config = await this.app.container.make('audit.config')
+      return new StoreManager(config)
     })
 
     this.app.container.singleton('audit.pipeline', async () => {
-      return new AuditPipeline()
+      const config = await this.app.container.make('audit.config')
+      const manager = await this.app.container.make('audit.manager')
+      return new AuditPipeline(config.queue, { store: manager.use() })
+    })
+
+    this.app.container.singleton('audit.redactor', async () => {
+      const config = await this.app.container.make('audit.config')
+      const salt = process.env[config.redaction.saltEnvVar]
+      return createRedactor({
+        paths: config.redaction.global,
+        mode: config.redaction.mode,
+        salt,
+      })
     })
 
     this.app.container.singleton('audit', async () => {
-      return new AuditService(
-        await this.app.container.make('audit.manager'),
-        await this.app.container.make('audit.pipeline')
-      )
+      const config = await this.app.container.make('audit.config')
+      const manager = await this.app.container.make('audit.manager')
+      const pipeline = await this.app.container.make('audit.pipeline')
+      return new AuditService(manager, pipeline, {
+        assemble: {
+          payloadMaxBytes: config.payloadMaxBytes,
+          streamBy: config.chain.streamBy,
+        },
+        context: auditContext,
+      })
     })
   }
 
   async boot() {
-    // M2: wire Lucid hooks helper, auth listener
+    // M3: wire Lucid hooks helper, auth listener
   }
 
   async start() {
-    // M2: start flusher, start outbox drainer
+    const pipeline = await this.app.container.make('audit.pipeline')
+    pipeline.start()
   }
 
   async shutdown() {
-    // M2: final flush with deadline
+    const pipeline = await this.app.container.make('audit.pipeline')
+    await pipeline.shutdown(5000)
   }
 }

@@ -1,5 +1,6 @@
 import { configProvider } from '@adonisjs/core'
 import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
+import type { HttpContext } from '@adonisjs/core/http'
 import type {
   AuditConfig,
   AuditEvent,
@@ -41,6 +42,7 @@ export type ResolvedAuditConfig<
     overflow: OverflowStrategy
   }
   payloadMaxBytes: number
+  tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
 }
 
 export function defineConfig<
@@ -88,14 +90,25 @@ export function defineConfig<
         overflow: config.queue?.overflow ?? 'dropOldest',
       },
       payloadMaxBytes: config.payloadMaxBytes ?? 32_768,
+      tenantResolver: config.tenantResolver,
     }
   })
 }
+export interface LucidStoreOptions {
+  connection?: string
+  table?: string
+  enforceImmutability?: boolean
+}
 
 export const stores = {
-  lucid: (_opts: Record<string, unknown>) =>
-    configProvider.create(async () => {
-      throw new Error('LucidStore not implemented yet')
+  lucid: (opts: LucidStoreOptions = {}) =>
+    configProvider.create(async (app: ApplicationService) => {
+      const { default: LucidStore } = await import('./stores/lucid_store.js').catch(() => {
+        throw new Error(
+          '@adonisjs/lucid is required for the lucid store. Install it as a peer dependency.'
+        )
+      })
+      return new LucidStore(app, opts)
     }),
   stream: (_opts: Record<string, unknown>) =>
     configProvider.create(async () => {

@@ -55,6 +55,7 @@ export type OverflowStrategy = 'dropOldest' | 'dropNew' | 'block'
 export type RedactionMode = 'mask' | 'remove' | 'hash'
 
 import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
+import type { HttpContext } from '@adonisjs/core/http'
 
 export type AuditStoreFactory = (application: ApplicationService) => Promise<AuditStoreContract>
 
@@ -88,6 +89,8 @@ export interface AuditConfig<
     overflow?: OverflowStrategy
   }
   payloadMaxBytes?: number
+
+  tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
 }
 
 // --- Module augmentation point ---

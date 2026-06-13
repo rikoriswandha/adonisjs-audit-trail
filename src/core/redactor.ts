@@ -101,7 +101,11 @@ function redactValue(
   return value
 }
 
-export function createRedactor(config: RedactorConfig) {
+export interface Redactor {
+  redact(values: Record<string, unknown>): Record<string, unknown>
+}
+
+export function createRedactor(config: RedactorConfig): Redactor {
   const patterns = config.paths.map(compilePattern)
   const salt = config.salt
 

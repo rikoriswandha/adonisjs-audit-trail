@@ -11,6 +11,7 @@ export interface AssembleInput {
   newValues?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
   tags?: string[]
+  actor?: AuditActor | null
 }
 
 export interface AssembleConfig {
@@ -87,7 +88,7 @@ export async function assembleEvent(
   context: AuditContextStore,
   config: AssembleConfig
 ): Promise<AuditEvent> {
-  const actor = await resolveActor(context)
+  const actor = input.actor ?? (await resolveActor(context))
   const tenantId = context.tenantId ?? config.tenantId ?? null
   const newValues = maybeTruncate(input.newValues ?? null, config.payloadMaxBytes)
 
