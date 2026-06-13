@@ -1,0 +1,162 @@
+{
+  "name": "@rikology/adonisjs-audit-trail",
+  "description": "Production-grade, tamper-evident audit trail for AdonisJS v7",
+  "version": "0.0.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "type": "module",
+  "files": [
+    "build",
+    "!build/bin",
+    "!build/tests"
+  ],
+  "exports": {
+    ".": "./build/index.js",
+    "./types": "./build/src/types.js",
+    "./auditable": "./build/src/mixins/auditable.js",
+    "./audit_provider": "./build/providers/audit_provider.js",
+    "./services/main": "./build/services/main.js",
+    "./stores": "./build/src/stores/main.js",
+    "./commands": "./build/commands/main.js",
+    "./audit_context_middleware": "./build/src/middleware/audit_context_middleware.js",
+    "./models/audit": "./build/src/models/audit.js"
+  },
+  "scripts": {
+    "copy:templates": "copyfiles \"stubs/**/*.stub\" build",
+    "copy:commands": "copyfiles \"commands/commands.json\" build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "quick:test": "node --import=@poppinss/ts-exec --enable-source-maps bin/test.ts",
+    "pretest": "npm run lint",
+    "test": "c8 npm run quick:test",
+    "precompile": "npm run lint",
+    "compile": "tsdown && tsc --emitDeclarationOnly --declaration",
+    "postcompile": "npm run copy:templates && npm run copy:commands",
+    "build": "npm run compile",
+    "release": "release-it",
+    "version": "npm run build",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "adonisjs",
+    "audit",
+    "audit-trail",
+    "lucid",
+    "compliance",
+    "tamper-evident"
+  ],
+  "author": "Rikology",
+  "license": "MIT",
+  "devDependencies": {
+    "@adonisjs/assembler": "^8.0.0",
+    "@adonisjs/auth": "^10.1.0",
+    "@adonisjs/core": "^7.0.1",
+    "@adonisjs/eslint-config": "^3.0.0",
+    "@adonisjs/lucid": "^22.4.2",
+    "@adonisjs/prettier-config": "^1.4.5",
+    "@adonisjs/tsconfig": "^2.0.0",
+    "@japa/assert": "^4.2.0",
+    "@japa/expect-type": "^2.0.4",
+    "@japa/file-system": "^3.0.0",
+    "@japa/runner": "^5.3.0",
+    "@poppinss/ts-exec": "^1.4.4",
+    "@release-it/conventional-changelog": "^10.0.5",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.3.5",
+    "better-sqlite3": "^12.10.0",
+    "c8": "^11.0.0",
+    "copyfiles": "^2.4.1",
+    "cross-env": "^10.1.0",
+    "eslint": "^10.0.3",
+    "luxon": "^3.7.2",
+    "prettier": "^3.8.1",
+    "release-it": "^19.2.4",
+    "tsdown": "^0.21.0",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "@adonisjs/core": "^7.0.0",
+    "@adonisjs/assembler": "^8.0.0",
+    "@adonisjs/lucid": "^22.0.0",
+    "@adonisjs/auth": "^10.0.0",
+    "luxon": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@adonisjs/assembler": {
+      "optional": true
+    },
+    "@adonisjs/auth": {
+      "optional": true
+    },
+    "@adonisjs/lucid": {
+      "optional": true
+    }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "tsdown": {
+    "entry": [
+      "./index.ts",
+      "./configure.ts",
+      "./providers/audit_provider.ts",
+      "./services/main.ts",
+      "./src/types.ts",
+      "./src/mixins/auditable.ts",
+      "./src/stores/main.ts",
+      "./src/middleware/audit_context_middleware.ts",
+      "./src/models/audit.ts",
+      "./commands/main.ts",
+      "./commands/audit_verify.ts",
+      "./commands/audit_prune.ts",
+      "./commands/audit_replay_outbox.ts",
+      "./commands/audit_stats.ts"
+    ],
+    "outDir": "./build",
+    "clean": true,
+    "format": "esm",
+    "minify": "dce-only",
+    "fixedExtension": false,
+    "dts": false,
+    "treeshake": false,
+    "sourcemaps": false,
+    "target": "esnext"
+  },
+  "release-it": {
+    "git": {
+      "requireCleanWorkingDir": true,
+      "requireUpstream": true,
+      "commitMessage": "chore(release): ${version}",
+      "tagAnnotation": "v${version}",
+      "push": true,
+      "tagName": "v${version}"
+    },
+    "github": {
+      "release": true
+    },
+    "npm": {
+      "publish": true,
+      "skipChecks": true
+    },
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": {
+          "name": "angular"
+        }
+      }
+    }
+  },
+  "c8": {
+    "reporter": [
+      "text",
+      "html"
+    ],
+    "exclude": [
+      "tests/**"
+    ]
+  },
+  "prettier": "@adonisjs/prettier-config"
+}
