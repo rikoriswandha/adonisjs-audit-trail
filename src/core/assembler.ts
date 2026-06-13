@@ -18,6 +18,7 @@ export interface AssembleConfig {
   payloadMaxBytes: number
   streamBy: 'global' | 'tenant' | ((event: AuditEvent) => string)
   tenantId?: string | null
+  crypto?: { encrypt: (event: AuditEvent) => Promise<AuditEvent> }
 }
 
 function sha256(value: string): string {
@@ -92,7 +93,7 @@ export async function assembleEvent(
   const tenantId = context.tenantId ?? config.tenantId ?? null
   const newValues = maybeTruncate(input.newValues ?? null, config.payloadMaxBytes)
 
-  const event: AuditEvent = {
+  let event: AuditEvent = {
     id: uuidv7(),
     event: input.event,
     stream: resolveStream(input, context, config),
@@ -112,6 +113,10 @@ export async function assembleEvent(
     tags: input.tags ?? [],
     schemaVersion: '1',
     createdAt: new Date().toISOString(),
+  }
+
+  if (config.crypto) {
+    event = await config.crypto.encrypt(event)
   }
 
   return event

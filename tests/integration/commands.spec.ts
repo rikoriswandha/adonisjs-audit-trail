@@ -2,25 +2,32 @@ import { test } from '@japa/runner'
 import type { ApplicationService } from '@adonisjs/core/types'
 import { Kernel } from '@adonisjs/core/ace'
 import type { BaseCommand } from '@adonisjs/core/ace'
+import { mkdtempSync, existsSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
 import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
+import { auditContext } from '../../src/audit_context.js'
 import AuditStats from '../../commands/audit_stats.js'
 import AuditVerify from '../../commands/audit_verify.js'
 import AuditPrune from '../../commands/audit_prune.js'
 import AuditReplayOutbox from '../../commands/audit_replay_outbox.js'
+import AuditForget from '../../commands/audit_forget.js'
+import { fileAppendPublisher } from '../../src/core/anchor.js'
+import { MemorySubjectKeyStore } from '../../src/core/subject_crypto.js'
 
 async function createCommandApp(auditConfig = {}) {
   const app = await createTestApp({
     default: 'lucid',
-    ...auditConfig,
     stores: {
       lucid: async (application: ApplicationService) => {
         const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
         return new LucidStore(application, {})
       },
     },
+    ...auditConfig,
   })
   await runMigrations(app)
   return app
@@ -37,23 +44,43 @@ async function seedCorruptedRows(app: ApplicationService) {
   )
 }
 
+function parseCommandArgv(argv: string[]): { args: string[]; flags: Record<string, unknown> } {
+  const flags: Record<string, unknown> = {}
+  const args: string[] = []
+
+  for (const arg of argv) {
+    if (arg.startsWith('--')) {
+      const [key, ...valueParts] = arg.slice(2).split('=')
+      flags[key] = valueParts.length > 0 ? valueParts.join('=') : true
+    } else {
+      args.push(arg)
+    }
+  }
+
+  return { args, flags }
+}
 async function runCommand(
   app: ApplicationService,
-  CommandClass: typeof BaseCommand,
+  CommandClass: new (...args: any[]) => BaseCommand,
   argv: string[] = []
 ) {
+  const parsed = parseCommandArgv(argv)
   const kernel = Kernel.create()
   const command = new (CommandClass as any)(
     app,
     kernel,
-    { args: argv, flags: {} },
+    { args: parsed.args, flags: parsed.flags },
     kernel.ui,
     kernel.prompt
-  ) as BaseCommand & { app: ApplicationService; exitCode?: number }
+  ) as BaseCommand & {
+    app: ApplicationService
+    exitCode?: number
+    hydrate: () => void
+  }
+  command.hydrate()
   await command.run()
   return command
 }
-
 test.group('Audit commands', (group) => {
   let app: ApplicationService
 
@@ -86,6 +113,52 @@ test.group('Audit commands', (group) => {
 
     const command = await runCommand(app, AuditVerify)
     assert.notEqual(command.exitCode, 0)
+  })
+
+  test('audit:verify --check-anchors matches anchor file', async ({ assert }) => {
+    const anchorsFile = join(mkdtempSync(join(tmpdir(), 'audit-anchor-')), 'anchors.ndjson')
+    const publish = await fileAppendPublisher(anchorsFile)
+
+    app = await createCommandApp({
+      chain: {
+        anchor: { every: 1, publish, anchorsFile },
+      },
+    })
+    await runMigrations(app)
+
+    const audit = (await app.container.make('audit')) as AuditService
+    await audit.log('user.login').commitSync()
+
+    for (let i = 0; i < 50; i++) {
+      if (existsSync(anchorsFile)) break
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    const command = await runCommand(app, AuditVerify, ['--check-anchors'])
+    assert.equal(command.exitCode, 0)
+  })
+
+  test('audit:forget deletes subject key', async ({ assert }) => {
+    const keyStore = new MemorySubjectKeyStore()
+    app = await createCommandApp({
+      cryptoShredding: {
+        enabled: true,
+        fields: ['email'],
+        keyStore,
+      },
+    })
+    await runMigrations(app)
+
+    const audit = (await app.container.make('audit')) as AuditService
+    await auditContext.run({ actor: { type: 'user', id: 'user-1' } }, async () => {
+      await audit.log('user.created').withNew({ email: 'ada@example.com' }).commitSync()
+    })
+
+    const command = await runCommand(app, AuditForget, ['--subject=user-1'])
+    assert.equal(command.exitCode, 0)
+
+    const storedKey = await keyStore.get('user-1')
+    assert.isNull(storedKey)
   })
 
   test('audit:prune dry-run counts without deleting', async ({ assert }) => {

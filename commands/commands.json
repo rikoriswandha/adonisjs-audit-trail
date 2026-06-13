@@ -25,9 +25,13 @@
           "name": "json",
           "type": "boolean",
           "description": "Output JSON"
+        },
+        {
+          "name": "check-anchors",
+          "type": "boolean",
+          "description": "Check anchored chain heads against anchor file"
         }
       ],
-      "args": [],
       "options": {},
       "filePath": "./audit_verify.js"
     },
@@ -88,6 +92,23 @@
       "args": [],
       "options": {},
       "filePath": "./audit_stats.js"
+    },
+    {
+      "commandName": "audit:forget",
+      "description": "Crypto-shred a data subject by deleting their encryption key",
+      "namespace": "audit",
+      "aliases": [],
+      "flags": [
+        {
+          "name": "subject",
+          "type": "string",
+          "description": "Data subject identifier",
+          "required": true
+        }
+      ],
+      "args": [],
+      "options": {},
+      "filePath": "./audit_forget.js"
     }
   ]
 }

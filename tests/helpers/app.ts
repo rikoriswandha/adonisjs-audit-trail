@@ -60,7 +60,7 @@ type TestAuditConfig = {
     perEvent?: Record<string, string>
     archive?: NonNullable<NonNullable<AuditConfig['retention']>['archive']>
   }
-  chain: Required<NonNullable<AuditConfig['chain']>>
+  chain: NonNullable<AuditConfig['chain']>
   queue: Required<NonNullable<AuditConfig['queue']>>
   payloadMaxBytes: number
   captureAuthEvents: boolean

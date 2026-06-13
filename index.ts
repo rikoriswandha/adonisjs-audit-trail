@@ -33,4 +33,8 @@ export type {
   RetentionPolicy,
   ResolvedRetentionPolicy,
   AuditEvents,
+  ChainHead,
+  AnchorConfig,
+  SubjectKeyStore,
+  CryptoShreddingConfig,
 } from './src/types.js'

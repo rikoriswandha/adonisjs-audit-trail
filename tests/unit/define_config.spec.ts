@@ -4,11 +4,7 @@ import type { ConfigProvider } from '@adonisjs/core/types'
 import type { ApplicationService } from '@adonisjs/core/types'
 import { defineConfig, stores } from '../../src/define_config.js'
 import type { ResolvedAuditConfig } from '../../src/define_config.js'
-import type {
-  AuditStoreContract,
-  AuditStoreFactory,
-  AuditStoreResolvedConfig,
-} from '../../src/types.js'
+import type { AuditStoreContract, AuditStoreFactory } from '../../src/types.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 
 const memoryStore = function (): AuditStoreContract {
@@ -55,17 +51,17 @@ test.group('defineConfig', function (group) {
     const provider = defineConfig({
       stores: {
         memory: configProvider.create(async function () {
-          return { type: 'memory' }
+          return memoryStore()
         }),
       },
       default: 'memory',
     })
 
     const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
-      memory: ConfigProvider<AuditStoreResolvedConfig>
+      memory: ConfigProvider<AuditStoreContract>
     }>
 
-    assert.deepEqual(resolved.stores.memory, { type: 'memory' })
+    assert.equal(typeof resolved.stores.memory.write, 'function')
   })
 
   test('applies default values', async function ({ assert }) {
@@ -98,14 +94,15 @@ test.group('defineConfig', function (group) {
   })
 
   test('store helpers resolve store instances', async function ({ assert }) {
-    const helpers = ['stream', 'http', 'fanout'] as const
-    for (const name of helpers) {
-      const factory = stores[name]
-      const provider = factory({})
-      const resolved = await configProvider.resolve(app, provider)
-      assert.isDefined(resolved)
-      assert.equal(typeof (resolved as AuditStoreContract).write, 'function')
-    }
+    const streamProvider = stores.stream({ destination: 'stdout' })
+    const streamResolved = await configProvider.resolve(app, streamProvider)
+    assert.isDefined(streamResolved)
+    assert.equal(typeof (streamResolved as AuditStoreContract).write, 'function')
+
+    const httpProvider = stores.http({ url: 'http://localhost/audit' })
+    const httpResolved = await configProvider.resolve(app, httpProvider)
+    assert.isDefined(httpResolved)
+    assert.equal(typeof (httpResolved as AuditStoreContract).write, 'function')
   })
 
   test('lucid store helper resolves a store', async function ({ assert }) {
@@ -113,6 +110,24 @@ test.group('defineConfig', function (group) {
     const resolved = await configProvider.resolve(app, provider)
     assert.isDefined(resolved)
     assert.equal(typeof (resolved as AuditStoreContract).write, 'function')
+  })
+
+  test('fanout helper resolves named store references', async function ({ assert }) {
+    const provider = defineConfig({
+      stores: {
+        memory: memoryFactory,
+        all: stores.fanout({ primary: 'memory', mirrors: [] }),
+      },
+      default: 'all',
+    })
+
+    const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
+      memory: typeof memoryFactory
+      all: ReturnType<typeof stores.fanout>
+    }>
+
+    assert.isDefined(resolved.stores.all)
+    assert.equal(typeof (resolved.stores.all as AuditStoreContract).write, 'function')
   })
 
   test('ResolvedAuditConfig shape is preserved', async function ({ expectTypeOf }) {

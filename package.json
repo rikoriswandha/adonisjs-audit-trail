@@ -117,7 +117,8 @@
       "./commands/audit_verify.ts",
       "./commands/audit_prune.ts",
       "./commands/audit_replay_outbox.ts",
-      "./commands/audit_stats.ts"
+      "./commands/audit_stats.ts",
+      "./commands/audit_forget.ts"
     ],
     "outDir": "./build",
     "clean": true,

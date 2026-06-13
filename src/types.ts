@@ -29,7 +29,6 @@ export interface AuditEvent {
   schemaVersion: '1'
   createdAt: string // ISO-8601 UTC ms
 }
-
 export interface ChainedAuditEvent extends AuditEvent {
   seq: number
   hash: string
@@ -58,8 +57,8 @@ export type AuditStoreFactory = (application: ApplicationService) => Promise<Aud
 export type AuditStoreResolvedConfig = Record<string, unknown>
 
 export interface AuditConfig<
-  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreResolvedConfig>> =
-    Record<string, AuditStoreFactory | ConfigProvider<AuditStoreResolvedConfig>>,
+  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>> =
+    Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>>,
 > {
   default?: keyof KnownStores
   guarantee?: GuaranteeMode
@@ -77,7 +76,9 @@ export interface AuditConfig<
   chain?: {
     enabled?: boolean
     streamBy?: 'global' | 'tenant' | ((event: AuditEvent) => string)
+    anchor?: AnchorConfig
   }
+  cryptoShredding?: CryptoShreddingConfig
   queue?: {
     maxBatchSize?: number
     flushIntervalMs?: number
@@ -118,6 +119,32 @@ export interface VerifyReport {
   expectedHash?: string
   actualHash?: string
   checkedCount: number
+}
+
+export interface ChainHead {
+  stream: string
+  seq: number
+  hash: string
+  anchoredAt: string
+}
+
+export interface AnchorConfig {
+  every: number | 'daily'
+  publish: (head: ChainHead) => Promise<void>
+  anchorsFile?: string
+}
+
+export interface SubjectKeyStore {
+  get(subjectId: string): Promise<string | null>
+  set(subjectId: string, key: string): Promise<void>
+  delete(subjectId: string): Promise<void>
+}
+
+export interface CryptoShreddingConfig {
+  enabled: boolean
+  fields: string[]
+  keyStore: SubjectKeyStore
+  subjectResolver?: (event: AuditEvent) => string | null
 }
 
 export interface PruneReport {

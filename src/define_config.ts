@@ -1,11 +1,14 @@
 import { configProvider } from '@adonisjs/core'
 import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
 import type { HttpContext } from '@adonisjs/core/http'
+import type { Writable } from 'node:stream'
 import type {
+  AnchorConfig,
   AuditConfig,
   AuditEvent,
+  AuditStoreContract,
   AuditStoreFactory,
-  AuditStoreResolvedConfig,
+  CryptoShreddingConfig,
   GuaranteeMode,
   OverflowStrategy,
   RedactionMode,
@@ -13,8 +16,8 @@ import type {
 } from './types.js'
 
 export type ResolvedAuditConfig<
-  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreResolvedConfig>> =
-    Record<string, AuditStoreFactory | ConfigProvider<AuditStoreResolvedConfig>>,
+  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>> =
+    Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>>,
 > = {
   default: keyof KnownStores
   guarantee: GuaranteeMode
@@ -34,7 +37,9 @@ export type ResolvedAuditConfig<
   chain: {
     enabled: boolean
     streamBy: 'global' | 'tenant' | ((event: AuditEvent) => string)
+    anchor?: AnchorConfig
   }
+  cryptoShredding?: CryptoShreddingConfig
   queue: {
     maxBatchSize: number
     flushIntervalMs: number
@@ -46,22 +51,44 @@ export type ResolvedAuditConfig<
   captureAuthEvents: boolean
 }
 
+const FANOUT_CONFIG = Symbol('fanoutConfig')
+
+interface FanoutConfigProvider extends ConfigProvider<AuditStoreContract> {
+  [FANOUT_CONFIG]: true
+  options: FanoutStoreOptions
+}
+
+function isFanoutProvider(
+  value: AuditStoreFactory | ConfigProvider<AuditStoreContract>
+): value is FanoutConfigProvider {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    FANOUT_CONFIG in value &&
+    (value as FanoutConfigProvider)[FANOUT_CONFIG] === true
+  )
+}
+
 export function defineConfig<
-  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreResolvedConfig>>,
+  KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>>,
 >(config: AuditConfig<KnownStores>): ConfigProvider<ResolvedAuditConfig<KnownStores>> {
   return configProvider.create(async (app) => {
-    const resolvedStores = {} as Record<string, unknown>
+    const resolvedStores = {} as Record<string, AuditStoreContract>
+    const fanoutEntries: { name: string; provider: FanoutConfigProvider }[] = []
 
     for (const [name, storeConfig] of Object.entries(config.stores)) {
-      if (typeof storeConfig === 'function') {
-        resolvedStores[name] = await (storeConfig as AuditStoreFactory)(app)
-      } else {
-        const resolved = await configProvider.resolve(app, storeConfig)
-        if (resolved === null) {
-          throw new Error(`Invalid config provider for store "${name}"`)
-        }
-        resolvedStores[name] = resolved
+      if (isFanoutProvider(storeConfig)) {
+        fanoutEntries.push({ name, provider: storeConfig })
+        continue
       }
+
+      resolvedStores[name] = await resolveStoreConfig(app, storeConfig)
+    }
+
+    for (const { name, provider } of fanoutEntries) {
+      const store = (await configProvider.resolve(app, provider)) as AuditStoreContract
+      bindFanoutStore(store, resolvedStores)
+      resolvedStores[name] = store
     }
 
     const defaultStore = (config.default ?? 'lucid') as keyof KnownStores
@@ -88,7 +115,9 @@ export function defineConfig<
       chain: {
         enabled: config.chain?.enabled ?? true,
         streamBy: config.chain?.streamBy ?? 'global',
+        ...(config.chain?.anchor !== undefined ? { anchor: config.chain.anchor } : {}),
       },
+      ...(config.cryptoShredding !== undefined ? { cryptoShredding: config.cryptoShredding } : {}),
       queue: {
         maxBatchSize: config.queue?.maxBatchSize ?? 200,
         flushIntervalMs: config.queue?.flushIntervalMs ?? 250,
@@ -101,15 +130,60 @@ export function defineConfig<
     }
   })
 }
+
+async function resolveStoreConfig(
+  app: ApplicationService,
+  storeConfig: AuditStoreFactory | ConfigProvider<AuditStoreContract>
+): Promise<AuditStoreContract> {
+  if (typeof storeConfig === 'function') {
+    return (storeConfig as AuditStoreFactory)(app)
+  }
+
+  const resolved = await configProvider.resolve(app, storeConfig)
+  if (resolved === null) {
+    throw new Error('Invalid config provider for audit store')
+  }
+
+  return resolved as AuditStoreContract
+}
+
+function bindFanoutStore(
+  store: AuditStoreContract,
+  stores: Record<string, AuditStoreContract>
+): void {
+  const fanout = store as { bindStores?: (stores: Record<string, AuditStoreContract>) => void }
+  if (typeof fanout.bindStores === 'function') {
+    fanout.bindStores(stores)
+  }
+}
+
 export interface LucidStoreOptions {
   connection?: string
   table?: string
   enforceImmutability?: boolean
 }
 
-export type StreamStoreOptions = Record<string, never>
-export type HttpStoreOptions = Record<string, never>
-export type FanoutStoreOptions = Record<string, never>
+export interface StreamStoreOptions {
+  destination?: 'stdout' | 'stderr' | string | Writable
+  format?: 'ndjson' | 'json'
+}
+
+export interface HttpStoreOptions {
+  url: string
+  headers?: Record<string, string>
+  signature?: {
+    secretEnvVar: string
+    header?: string
+    algorithm?: 'sha256'
+  }
+  idempotencyHeader?: string
+}
+
+export interface FanoutStoreOptions {
+  primary: string | AuditStoreContract
+  mirrors?: (string | AuditStoreContract)[]
+  mirrorFailure?: 'log' | 'throw'
+}
 
 export const stores = {
   lucid: (opts: LucidStoreOptions = {}) =>
@@ -121,19 +195,22 @@ export const stores = {
       })
       return new LucidStore(app, opts)
     }),
-  stream: (_opts: StreamStoreOptions = {}) =>
+  stream: (opts: StreamStoreOptions = {}) =>
     configProvider.create(async () => {
       const { default: StreamStore } = await import('./stores/stream_store.js')
-      return new StreamStore()
+      return new StreamStore(opts)
     }),
-  http: (_opts: HttpStoreOptions = {}) =>
+  http: (opts: HttpStoreOptions) =>
     configProvider.create(async () => {
       const { default: HttpStore } = await import('./stores/http_store.js')
-      return new HttpStore()
+      return new HttpStore(opts)
     }),
-  fanout: (_opts: FanoutStoreOptions = {}) =>
-    configProvider.create(async () => {
+  fanout: (opts: FanoutStoreOptions) => {
+    const base = configProvider.create(async () => {
       const { default: FanoutStore } = await import('./stores/fanout_store.js')
-      return new FanoutStore()
-    }),
+      return new FanoutStore(opts)
+    })
+
+    return Object.assign(base, { [FANOUT_CONFIG]: true as const, options: opts })
+  },
 }
