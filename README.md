@@ -99,32 +99,33 @@ Feel free to change the exports as per your requirements.
 
 ## Testing
 
-We configure the [Japa test runner](https://japa.dev/) with this starter kit. Japa is used in AdonisJS applications as well. Just run one of the following commands to execute tests.
+We use the [Japa test runner](https://japa.dev/). Integration tests run against SQLite, PostgreSQL 16, and MySQL 8 via [testcontainers](https://www.testcontainers.org/).
 
-- `npm run test`: This command will first lint the code using ESlint and then run tests and report the test coverage using [c8](https://github.com/bcoe/c8).
-- `npm run quick:test`: Runs only the tests without linting or coverage reporting.
+- `npm run test`: Lint, then run tests with coverage (SQLite only locally).
+- `npm run quick:test`: Run tests without linting or coverage.
+- `SKIP_DOCKER_TESTS=1 npm run quick:test`: Skip Postgres/MySQL matrix and run SQLite only.
+- `BENCH_DB=postgres npm run bench`: Run benchmarks against Postgres (defaults to SQLite).
 
-The starter kit also has a Github workflow file to run tests using Github Actions. The tests are executed against `Node.js 20.x` and `Node.js 21.x` versions on both Linux and Windows. Feel free to edit the workflow file in the `.github/workflows` directory.
+The GitHub Actions workflow runs unit tests on Ubuntu + Windows and the full DB matrix on Ubuntu.
+
+## Benchmarks
+
+Run benchmarks locally (SQLite by default):
+
+```bash
+npm run bench
+BENCH_DB=postgres npm run bench
+```
+
+Targets:
+
+| Metric                                 | Target           | Observed (SQLite, MBP M1 Pro)         |
+| -------------------------------------- | ---------------- | ------------------------------------- |
+| Enqueue overhead per `model.save()`    | < 0.2 ms p99     | ~0.075 ms p99                         |
+| Flush throughput (Postgres, batch 200) | ≥ 5,000 events/s | run `BENCH_DB=postgres npm run bench` |
 
 ## TypeScript workflow
 
 - The starter kit uses [tsc](https://www.typescriptlang.org/docs/handbook/compiler-options.html) for compiling the TypeScript to JavaScript when publishing the package.
 - [TS-Node](https://typestrong.org/ts-node/) and [SWC](https://swc.rs/) are used to run tests without compiling the source code.
 - The `tsconfig.json` file is extended from [`@adonisjs/tsconfig`](https://github.com/adonisjs/tooling-config/tree/main/packages/typescript-config) and uses the `NodeNext` module system. Meaning the packages are written using ES modules.
-- You can perform type checking without compiling the source code using the `npm run type check` script.
-
-Feel free to explore the `tsconfig.json` file for all the configured options.
-
-## ESLint and Prettier setup
-
-The starter kit configures ESLint and Prettier
-using our [shared config](https://github.com/adonisjs/tooling-config/tree/main/packages).
-ESLint configuration is stored within the `eslint.config.js` file.
-Prettier configuration is stored within the `package.json` file.
-Feel free to change the configuration, use custom plugins, or remove both tools altogether.
-
-## Using Stale bot
-
-The [Stale bot](https://github.com/apps/stale) is a Github application that automatically marks issues and PRs as stale and closes after a specific duration of inactivity.
-
-Feel free to delete the `.github/stale.yml` and `.github/lock.yml` files if you decide not to use the Stale bot.

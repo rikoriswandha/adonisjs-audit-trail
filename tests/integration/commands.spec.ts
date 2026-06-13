@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
 import { auditContext } from '../../src/audit_context.js'
@@ -18,17 +19,20 @@ import AuditForget from '../../commands/audit_forget.js'
 import { fileAppendPublisher } from '../../src/core/anchor.js'
 import { MemorySubjectKeyStore } from '../../src/core/subject_crypto.js'
 
-async function createCommandApp(auditConfig = {}) {
-  const app = await createTestApp({
-    default: 'lucid',
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createCommandApp(dialect: string = 'sqlite', auditConfig = {}) {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      ...auditConfig,
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-    ...auditConfig,
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
@@ -38,10 +42,12 @@ async function seedCorruptedRows(app: ApplicationService) {
   await audit.log('user.login').commitSync()
   const row = await Audit.query().orderBy('seq', 'asc').firstOrFail()
   const db = await app.container.make('lucid.db')
-  await db.rawQuery(
-    "UPDATE audits SET hash = '0000000000000000000000000000000000000000000000000000000000000000' WHERE id = ?",
-    [row.id]
-  )
+  await db
+    .connection()
+    .query()
+    .from('audits')
+    .where('id', row.id)
+    .update({ hash: '0'.repeat(64) })
 }
 
 function parseCommandArgv(argv: string[]): { args: string[]; flags: Record<string, unknown> } {
@@ -81,11 +87,12 @@ async function runCommand(
   await command.run()
   return command
 }
-test.group('Audit commands', (group) => {
+
+withDatabases('Audit commands', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createCommandApp()
+    app = await createCommandApp(dialect)
   })
 
   group.each.teardown(async () => {
@@ -119,7 +126,7 @@ test.group('Audit commands', (group) => {
     const anchorsFile = join(mkdtempSync(join(tmpdir(), 'audit-anchor-')), 'anchors.ndjson')
     const publish = await fileAppendPublisher(anchorsFile)
 
-    app = await createCommandApp({
+    app = await createCommandApp(dialect, {
       chain: {
         anchor: { every: 1, publish, anchorsFile },
       },
@@ -140,7 +147,7 @@ test.group('Audit commands', (group) => {
 
   test('audit:forget deletes subject key', async ({ assert }) => {
     const keyStore = new MemorySubjectKeyStore()
-    app = await createCommandApp({
+    app = await createCommandApp(dialect, {
       cryptoShredding: {
         enabled: true,
         fields: ['email'],
@@ -175,31 +182,34 @@ test.group('Audit commands', (group) => {
 
   test('audit:replay-outbox drains pending rows', async ({ assert }) => {
     const db = await app.container.make('lucid.db')
-    await db.table('audit_outbox').insert({
-      payload: JSON.stringify({
-        id: crypto.randomUUID(),
-        event: 'outbox.event',
-        stream: 'global',
-        auditableType: null,
-        auditableId: null,
-        oldValues: null,
-        newValues: null,
-        metadata: null,
-        actor: { type: 'system', id: null },
-        tenantId: null,
-        requestId: null,
-        correlationId: null,
-        ipAddress: null,
-        userAgent: null,
-        url: null,
-        httpMethod: null,
-        tags: [],
-        schemaVersion: '1',
-        createdAt: new Date().toISOString(),
-      }),
-      attempts: 0,
-      created_at: new Date().toISOString(),
-    })
+    await db
+      .connection()
+      .table('audit_outbox')
+      .insert({
+        payload: JSON.stringify({
+          id: crypto.randomUUID(),
+          event: 'outbox.event',
+          stream: 'global',
+          auditableType: null,
+          auditableId: null,
+          oldValues: null,
+          newValues: null,
+          metadata: null,
+          actor: { type: 'system', id: null },
+          tenantId: null,
+          requestId: null,
+          correlationId: null,
+          ipAddress: null,
+          userAgent: null,
+          url: null,
+          httpMethod: null,
+          tags: [],
+          schemaVersion: '1',
+          createdAt: new Date().toISOString(),
+        }),
+        attempts: 0,
+        created_at: new Date().toISOString(),
+      })
 
     const command = await runCommand(app, AuditReplayOutbox)
     assert.equal(command.exitCode, 0)

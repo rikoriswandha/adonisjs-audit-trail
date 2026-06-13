@@ -3,19 +3,23 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import Audit from '../../src/models/audit.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 import { Post } from '../helpers/models.js'
 
-async function createLucidApp(auditConfig = {}) {
-  const app = await createTestApp({
-    default: 'lucid',
-    ...auditConfig,
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createLucidApp(dialect: string = 'sqlite', auditConfig = {}) {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      ...auditConfig,
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
@@ -29,9 +33,9 @@ async function waitForAudits(expected: number): Promise<void> {
   }
 }
 
-test.group('Auditable transactions', () => {
+withDatabases('Auditable transactions', (_group, dialect) => {
   test('rolled-back transactions do not enqueue audit rows', async ({ assert }) => {
-    const app = await createLucidApp()
+    const app = await createLucidApp(dialect)
 
     try {
       const db = await app.container.make('lucid.db')
@@ -53,7 +57,7 @@ test.group('Auditable transactions', () => {
   })
 
   test('transactional-outbox co-commits and drains model audit events', async ({ assert }) => {
-    const app = await createLucidApp({ guarantee: 'transactional-outbox' })
+    const app = await createLucidApp(dialect, { guarantee: 'transactional-outbox' })
 
     try {
       const db = await app.container.make('lucid.db')

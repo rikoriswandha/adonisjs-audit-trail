@@ -3,6 +3,7 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import type { AuditConfig, AuditStoreContract, ChainedAuditEvent } from '../../src/types.js'
 import type { ResolvedAuditConfig } from '../../src/define_config.js'
 import { chainBatch, verifyChain } from '../../src/core/hash_chain.js'
+import { startContainer, type ContainerHandle, type DbDialect } from './containers.js'
 
 function createMemoryStore(): AuditStoreContract {
   const events: ChainedAuditEvent[] = []
@@ -103,8 +104,22 @@ function resolveAuditConfig(auditConfig: Partial<AuditConfig>): TestAuditConfig 
   }
 }
 
+const containerMap = new WeakMap<ApplicationService, ContainerHandle>()
+
 export async function createTestApp(
-  auditConfig: Partial<AuditConfig> = {}
+  auditConfig: Partial<AuditConfig> = {},
+  dialect: DbDialect = 'sqlite'
+): Promise<ApplicationService> {
+  const container = await startContainer(dialect)
+  if (!container) {
+    throw new Error(`Failed to start ${dialect} container`)
+  }
+  return createTestAppWithDb(auditConfig, container)
+}
+
+export async function createTestAppWithDb(
+  auditConfig: Partial<AuditConfig> = {},
+  container: ContainerHandle
 ): Promise<ApplicationService> {
   const resolvedConfig = resolveAuditConfig(auditConfig)
 
@@ -139,12 +154,9 @@ export async function createTestApp(
       },
       config: {
         database: {
-          connection: 'sqlite',
+          connection: container.dialect,
           connections: {
-            sqlite: {
-              client: 'better-sqlite3',
-              connection: { filename: ':memory:' },
-            },
+            [container.dialect]: container.config,
           },
         },
       },
@@ -155,9 +167,17 @@ export async function createTestApp(
   await app.init()
   await app.boot()
   await app.start(() => {})
+
+  containerMap.set(app, container)
   return app
 }
 
+export function getContainerDialect(app: ApplicationService): DbDialect | undefined {
+  return containerMap.get(app)?.dialect
+}
+
 export async function cleanupTestApp(app: ApplicationService): Promise<void> {
+  const container = containerMap.get(app)
   await app.terminate()
+  await container?.stop()
 }

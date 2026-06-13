@@ -9,7 +9,8 @@
   "files": [
     "build",
     "!build/bin",
-    "!build/tests"
+    "!build/tests",
+    "!build/benchmarks"
   ],
   "exports": {
     ".": "./build/index.js",
@@ -29,8 +30,9 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "quick:test": "node --import=@poppinss/ts-exec --enable-source-maps bin/test.ts",
-    "pretest": "npm run lint",
     "test": "c8 npm run quick:test",
+    "bench": "node --import=@poppinss/ts-exec benchmarks/main.ts",
+    "pretest": "npm run lint",
     "precompile": "npm run lint",
     "compile": "tsdown && tsc --emitDeclarationOnly --declaration",
     "postcompile": "npm run copy:templates && npm run copy:commands",
@@ -77,6 +79,7 @@
     "prettier": "^3.8.1",
     "release-it": "^19.2.4",
     "testcontainers": "^12.0.2",
+    "tinybench": "^6.0.2",
     "tsdown": "^0.21.0",
     "typescript": "^5.9.3"
   },

@@ -5,28 +5,32 @@ import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 import { Post } from '../helpers/models.js'
 
-async function createLucidApp(auditConfig = {}) {
-  const app = await createTestApp({
-    default: 'lucid',
-    ...auditConfig,
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createLucidApp(dialect: string = 'sqlite', auditConfig = {}) {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      ...auditConfig,
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
 
-test.group('Domain events', (group) => {
+withDatabases('Domain events', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createLucidApp()
+    app = await createLucidApp(dialect)
   })
 
   group.each.teardown(async () => {

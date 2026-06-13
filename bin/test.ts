@@ -7,5 +7,6 @@ processCLIArgs(process.argv.splice(2))
 configure({
   files: ['tests/**/*.spec.ts'],
   plugins: [assert(), expectTypeOf()],
+  forceExit: true,
 })
 run()

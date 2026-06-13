@@ -1,22 +1,28 @@
 import { test } from '@japa/runner'
 import type { ApplicationService } from '@adonisjs/core/types'
+import '../../src/types/container_bindings.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
 import type { AuditEvent } from '../../src/types.js'
 import { auditContext } from '../../src/audit_context.js'
 
-async function createLucidApp() {
-  const app = await createTestApp({
-    default: 'lucid',
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createLucidApp(dialect: string = 'sqlite', auditConfig = {}) {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      ...auditConfig,
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
@@ -46,11 +52,11 @@ function makeOutboxEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
   }
 }
 
-test.group('AuditProvider', (group) => {
+withDatabases('AuditProvider', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createLucidApp()
+    app = await createLucidApp(dialect)
   })
 
   group.each.teardown(async () => {
@@ -93,16 +99,19 @@ test.group('AuditProvider', (group) => {
 
   test('provider pipeline applies configured redaction before writing', async ({ assert }) => {
     await cleanupTestApp(app)
-    app = await createTestApp({
-      default: 'lucid',
-      redaction: { global: ['password'], mode: 'mask' },
-      stores: {
-        lucid: async (application: ApplicationService) => {
-          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-          return new LucidStore(application, {})
+    app = await createTestApp(
+      {
+        default: 'lucid',
+        redaction: { global: ['password'], mode: 'mask' },
+        stores: {
+          lucid: async (application: ApplicationService) => {
+            const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+            return new LucidStore(application, {})
+          },
         },
       },
-    })
+      dialect as any
+    )
     await runMigrations(app)
 
     const audit = (await app.container.make('audit')) as AuditService
@@ -130,21 +139,24 @@ test.group('AuditProvider', (group) => {
     await app.terminate()
     assert.equal(pipeline.stats().written, 1)
 
-    app = await createLucidApp()
+    app = await createLucidApp(dialect)
   })
 
   test('transactional outbox drainer replays pending rows', async ({ assert }) => {
     await cleanupTestApp(app)
-    app = await createTestApp({
-      default: 'lucid',
-      guarantee: 'transactional-outbox',
-      stores: {
-        lucid: async (application: ApplicationService) => {
-          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-          return new LucidStore(application, {})
+    app = await createTestApp(
+      {
+        default: 'lucid',
+        guarantee: 'transactional-outbox',
+        stores: {
+          lucid: async (application: ApplicationService) => {
+            const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+            return new LucidStore(application, {})
+          },
         },
       },
-    })
+      dialect as any
+    )
     await runMigrations(app)
 
     const db = await app.container.make('lucid.db')

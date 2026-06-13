@@ -2,6 +2,7 @@ import { test } from '@japa/runner'
 import type { ApplicationService } from '@adonisjs/core/types'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 import { Post } from '../helpers/models.js'
 import Audit from '../../src/models/audit.js'
 import type { AuditEvent } from '../../src/types.js'
@@ -37,25 +38,28 @@ function makeEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
   }
 }
 
-async function createLucidApp() {
-  const app = await createTestApp({
-    default: 'lucid',
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createLucidApp(dialect: string = 'sqlite') {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
 
-test.group('Audit model scopes', (group) => {
+withDatabases('Audit model scopes', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createLucidApp()
+    app = await createLucidApp(dialect)
   })
 
   group.each.teardown(async () => {

@@ -30,7 +30,7 @@ jobs:
       - name: Run typecheck
         run: npm run typecheck
 
-  tests:
+  test-unit:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -44,5 +44,23 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install
         run: npm install
-      - name: Run tests
-        run: npm test
+      - name: Run unit tests (SQLite only)
+        run: SKIP_DOCKER_TESTS=1 npm test
+
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [lint, typecheck]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install
+        run: npm install
+      - name: Run DB matrix (SQLite/PG/MySQL) x3 for stability
+        run: |
+          for i in 1 2 3; do
+            echo "=== Integration run $i ==="
+            npm run quick:test
+          done

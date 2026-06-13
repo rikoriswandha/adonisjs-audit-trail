@@ -3,21 +3,25 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import Audit from '../../src/models/audit.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
+import { withDatabases } from '../helpers/matrix.js'
 
 type TestEmitter = {
   emit(event: string, payload: unknown): Promise<void>
 }
 
-async function createLucidApp() {
-  const app = await createTestApp({
-    default: 'lucid',
-    stores: {
-      lucid: async (application: ApplicationService) => {
-        const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-        return new LucidStore(application, {})
+async function createLucidApp(dialect: string = 'sqlite') {
+  const app = await createTestApp(
+    {
+      default: 'lucid',
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
       },
     },
-  })
+    dialect as any
+  )
   await runMigrations(app)
   return app
 }
@@ -31,11 +35,11 @@ async function waitForAudits(expected: number): Promise<void> {
   }
 }
 
-test.group('Auth listener', (group) => {
+withDatabases('Auth listener', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createLucidApp()
+    app = await createLucidApp(dialect)
   })
 
   group.each.teardown(async () => {
