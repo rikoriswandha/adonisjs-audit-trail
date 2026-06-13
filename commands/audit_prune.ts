@@ -4,6 +4,7 @@ import type { ResolvedAuditConfig } from '../src/define_config.js'
 export default class AuditPrune extends BaseCommand {
   static commandName = 'audit:prune'
   static description = 'Prune audit events according to retention policy'
+  static options = { startApp: true as const }
 
   @flags.string({ description: 'Event name to prune' })
   declare event: string | undefined

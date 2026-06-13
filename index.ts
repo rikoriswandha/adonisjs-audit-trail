@@ -8,7 +8,7 @@
 */
 
 export { configure } from './configure.ts'
-export { stubsRoot } from './stubs/main.ts'
+export { defineConfig, stores } from './src/define_config.js'
 
 export type {
   AuditEvent,

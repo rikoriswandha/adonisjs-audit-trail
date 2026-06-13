@@ -4,6 +4,7 @@ import type { ResolvedAuditConfig } from '../src/define_config.js'
 export default class AuditForget extends BaseCommand {
   static commandName = 'audit:forget'
   static description = 'Crypto-shred a data subject by deleting their encryption key'
+  static options = { startApp: true as const }
 
   @flags.string({ description: 'Data subject identifier', required: true })
   declare subject: string

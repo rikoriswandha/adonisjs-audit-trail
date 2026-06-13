@@ -1,131 +1,113 @@
-# AdonisJS package starter kit
+# `@rikology/adonisjs-audit-trail`
 
-> [!note]
-> This starter kit targets **AdonisJS v7**
+Production-grade, tamper-evident audit trail for [AdonisJS v7](https://adonisjs.com).
 
-> A boilerplate for creating AdonisJS packages
+[![checks](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml/badge.svg)](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml)
+[![npm version](https://img.shields.io/npm/v/@rikology/adonisjs-audit-trail)](https://www.npmjs.com/package/@rikology/adonisjs-audit-trail)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 
-This repo provides you with a starting point for creating AdonisJS packages. Of course, you can create a package from scratch with your folder structure and workflow. However, using this starter kit can speed up the process, as you have fewer decisions to make.
+- **Automatic** model auditing via a Lucid mixin.
+- **Explicit** domain events via a fluent API.
+- **Tamper-evident** SHA-256 hash chains with `node ace audit:verify`.
+- **Asynchronous, batched write pipeline** that never blocks the request path.
+- **Pluggable stores**: SQL (Lucid), NDJSON stream, HTTP collector, or fanout.
+- **PII-aware** redaction, masking, hashing, and crypto-shredding support.
+- **Type-safe** end-to-end with generated event-name unions and v7 transformers.
 
-## Setup
+## Requirements
 
-- Clone the repo on your computer, or use `giget` to download this repo without the Git history.
-  ```sh
-  npx giget@latest gh:adonisjs/pkg-starter-kit
-  ```
-- Install dependencies.
-- Update the `package.json` file and define the `name`, `description`, `keywords`, and `author` properties.
-- The repo is configured with an MIT license. Feel free to change that if you are not publishing under the MIT license.
+- Node.js `>= 24`
+- AdonisJS v7 (`@adonisjs/core@^7`)
+- TypeScript 5.9+
 
-## Folder structure
+## Quick start
 
-The starter kit mimics the folder structure of the official packages. Feel free to rename files and folders as per your requirements.
+### 1. Install
 
-```
-├── providers
-├── src
-├── bin
-├── stubs
-├── configure.ts
-├── index.ts
-├── LICENSE.md
-├── package.json
-├── README.md
-├── tsconfig.json
-├── tsnode.esm.js
+```bash
+node ace add @rikology/adonisjs-audit-trail
 ```
 
-- The `configure.ts` file exports the `configure` hook to configure the package using the `node ace configure` command.
-- The `index.ts` file is the main entry point of the package.
-- The `tsnode.esm.js` file runs TypeScript code using TS-Node + SWC. Please read the code comment in this file to learn more.
-- The `bin` directory contains the entry point file to run Japa tests.
-- Learn more about [the `providers` directory](./providers/README.md).
-- Learn more about [the `src` directory](./src/README.md).
-- Learn more about [the `stubs` directory](./stubs/README.md).
+The configure command will publish `config/audit.ts`, migrations, the audit transformer, and register the provider, commands, and middleware.
 
-### File system naming convention
+### 2. Run migrations
 
-We use `snake_case` naming conventions for the file system. The rule is enforced using ESLint. However, turn off the rule and use your preferred naming conventions.
-
-## Peer dependencies
-
-The starter kit has a peer dependency on `@adonisjs/core@6`. Since you are creating a package for AdonisJS, you must make it against a specific version of the framework core.
-
-If your package needs Lucid to be functional, you may install `@adonisjs/lucid` as a development dependency and add it to the list of `peerDependencies`.
-
-As a rule of thumb, packages installed in the user application should be part of the `peerDependencies` of your package and not the main dependency.
-
-For example, if you install `@adonisjs/core` as a main dependency, then essentially, you are importing a separate copy of `@adonisjs/core` and not sharing the one from the user application. Here is a great article explaining [peer dependencies](https://blog.bitsrc.io/understanding-peer-dependencies-in-javascript-dbdb4ab5a7be).
-
-## Published files
-
-Instead of publishing your repo's source code to npm, you must cherry-pick files and folders to publish only the required files.
-
-The cherry-picking uses the `files` property inside the `package.json` file. By default, we publish the following files and folders.
-
-```json
-{
-  "files": [
-    "build/src",
-    "build/providers",
-    "build/stubs",
-    "build/index.d.ts",
-    "build/index.js",
-    "build/configure.d.ts",
-    "build/configure.js"
-  ]
-}
+```bash
+node ace migration:run
 ```
 
-If you create additional folders or files, mention them inside the `files` array.
+### 3. Add the mixin to a model
 
-## Exports
+```ts
+import { compose } from '@adonisjs/core/helpers'
+import { BaseModel } from '@adonisjs/lucid/orm'
+import { Auditable } from '@rikology/adonisjs-audit-trail/auditable'
 
-[Node.js Subpath exports](https://nodejs.org/api/packages.html#subpath-exports) allows you to define the exports of your package regardless of the folder structure. This starter kit defines the following exports.
-
-```json
-{
-  "exports": {
-    ".": "./build/index.js",
-    "./types": "./build/src/types.js"
+export default class Invoice extends compose(BaseModel, Auditable) {
+  static auditConfig = {
+    redact: ['iban'],
+    tags: ['billing'],
   }
+
+  // ... columns
 }
 ```
 
-- The dot `.` export is the main export.
-- The `./types` exports all the types defined inside the `./build/src/types.js` file (the compiled output).
+Every `create`, `update`, `delete`, and restore now produces an immutable audit record automatically.
 
-Feel free to change the exports as per your requirements.
+### 4. Log explicit domain events
 
-## Testing
+```ts
+import audit from '@rikology/adonisjs-audit-trail/services/main'
 
-We use the [Japa test runner](https://japa.dev/). Integration tests run against SQLite, PostgreSQL 16, and MySQL 8 via [testcontainers](https://www.testcontainers.org/).
+await audit.log('invoice.approved').on(invoice).withMeta({ level: 2 }).commit()
+```
 
-- `npm run test`: Lint, then run tests with coverage (SQLite only locally).
-- `npm run quick:test`: Run tests without linting or coverage.
-- `SKIP_DOCKER_TESTS=1 npm run quick:test`: Skip Postgres/MySQL matrix and run SQLite only.
-- `BENCH_DB=postgres npm run bench`: Run benchmarks against Postgres (defaults to SQLite).
+### 5. Query the trail
 
-The GitHub Actions workflow runs unit tests on Ubuntu + Windows and the full DB matrix on Ubuntu.
+```ts
+import Audit from '@rikology/adonisjs-audit-trail/models/audit'
+
+const trail = await Audit.forModel(invoice).orderBy('seq', 'desc').cursorPaginate(20)
+```
+
+### 6. Verify integrity
+
+```bash
+node ace audit:verify
+```
+
+Exit code is non-zero when a chain break is detected, so it can be wired into CI/cron.
+
+## Documentation
+
+- [Configuration reference](./docs/configuration.md)
+- [Guarantee modes](./docs/guarantee-modes.md)
+- [Tamper evidence & verification](./docs/tamper-evidence.md)
+- [Redaction & GDPR](./docs/redaction-gdpr.md)
+- [Retention & pruning](./docs/retention.md)
+- [Multi-tenancy](./docs/multi-tenancy.md)
+- [Stores](./docs/stores.md)
+- [Operations guide](./docs/operations.md)
+- [Recipes: Inertia audit viewer](./docs/recipes/inertia-viewer.md)
+- [Recipes: SIEM shipping](./docs/recipes/siem-shipping.md)
+- [Threat model](./docs/threat-model.md)
+- [Upgrade policy](./docs/upgrade-policy.md)
 
 ## Benchmarks
 
-Run benchmarks locally (SQLite by default):
+Run locally with:
 
 ```bash
 npm run bench
 BENCH_DB=postgres npm run bench
 ```
 
-Targets:
-
 | Metric                                 | Target           | Observed (SQLite, MBP M1 Pro)         |
 | -------------------------------------- | ---------------- | ------------------------------------- |
 | Enqueue overhead per `model.save()`    | < 0.2 ms p99     | ~0.075 ms p99                         |
-| Flush throughput (Postgres, batch 200) | ≥ 5,000 events/s | run `BENCH_DB=postgres npm run bench` |
+| Flush throughput (Postgres, batch 200) | >= 5,000 events/s | run `BENCH_DB=postgres npm run bench` |
 
-## TypeScript workflow
+## License
 
-- The starter kit uses [tsc](https://www.typescriptlang.org/docs/handbook/compiler-options.html) for compiling the TypeScript to JavaScript when publishing the package.
-- [TS-Node](https://typestrong.org/ts-node/) and [SWC](https://swc.rs/) are used to run tests without compiling the source code.
-- The `tsconfig.json` file is extended from [`@adonisjs/tsconfig`](https://github.com/adonisjs/tooling-config/tree/main/packages/typescript-config) and uses the `NodeNext` module system. Meaning the packages are written using ES modules.
+[MIT](./LICENSE.md)

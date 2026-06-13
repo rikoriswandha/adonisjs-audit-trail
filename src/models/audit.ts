@@ -97,33 +97,35 @@ export default class Audit extends BaseModel {
 
   static forModel = scope(
     (query, model: { constructor: { name: string }; id: string | number }) => {
-      query.where('auditable_type', model.constructor.name).where('auditable_id', String(model.id))
+      return query
+        .where('auditable_type', model.constructor.name)
+        .where('auditable_id', String(model.id))
     }
   )
 
   static forRef = scope((query, type: string, id: string) => {
-    query.where('auditable_type', type).where('auditable_id', id)
+    return query.where('auditable_type', type).where('auditable_id', id)
   })
 
   static byActor = scope(
     (query, actor: { id: string | number; constructor?: { name?: string } }) => {
       const type = actor.constructor?.name ?? 'user'
-      query.where('actor_type', type).where('actor_id', String(actor.id))
+      return query.where('actor_type', type).where('actor_id', String(actor.id))
     }
   )
 
   static inTenant = scope((query, id: string) => {
-    query.where('tenant_id', id)
+    return query.where('tenant_id', id)
   })
 
   static between = scope((query, from: Date | string | DateTime, to: Date | string | DateTime) => {
     const fromIso = Audit.#toIso(from)
     const toIso = Audit.#toIso(to)
-    query.where('created_at', '>=', fromIso).where('created_at', '<=', toIso)
+    return query.where('created_at', '>=', fromIso).where('created_at', '<=', toIso)
   })
 
   static event = scope((query, name: string) => {
-    query.where('event', name)
+    return query.where('event', name)
   })
 
   static #toIso(value: Date | string | DateTime): string {

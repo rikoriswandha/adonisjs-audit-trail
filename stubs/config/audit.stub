@@ -25,9 +25,9 @@ export default defineConfig({
    */
   stores: {
     lucid: stores.lucid({
-      connection: 'audit',
       table: 'audits',
       enforceImmutability: {{ immutability }},
+      // connection: 'audit', // Optional: use a dedicated audit DB connection.
     }),
   },
 
@@ -57,7 +57,7 @@ export default defineConfig({
    */
   chain: {
     enabled: true,
-    streamBy: '{{#multiTenant}}tenant{{/multiTenant}}{{^multiTenant}}global{{/multiTenant}}',
+    streamBy: '{{#if multiTenant}}tenant{{/if}}{{#if !multiTenant}}global{{/if}}',
   },
 
   /**
@@ -75,7 +75,7 @@ export default defineConfig({
    */
   payloadMaxBytes: 32_768,
 
-  {{#multiTenant}}
+  {{#if multiTenant}}
   /**
    * Resolve the tenant id from the HTTP context.
    * Adjust this to match your tenancy strategy (subdomain, header, auth, etc.).
@@ -83,7 +83,7 @@ export default defineConfig({
   tenantResolver(ctx) {
     return ctx.request.header('x-tenant-id') ?? null
   },
-  {{/multiTenant}}
+  {{/if}}
 
   /**
    * Automatically capture auth login/logout events.

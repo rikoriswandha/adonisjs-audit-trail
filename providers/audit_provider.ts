@@ -1,4 +1,6 @@
+import { configProvider } from '@adonisjs/core'
 import type { ApplicationService } from '@adonisjs/core/types'
+import type { ResolvedAuditConfig } from '../src/define_config.js'
 import AuthListener from '../src/listeners/auth_listener.js'
 import '../src/types/container_bindings.js'
 import StoreManager from '../src/stores/store_manager.js'
@@ -10,12 +12,20 @@ import { createRedactor } from '../src/core/redactor.js'
 import { AnchorService } from '../src/core/anchor.js'
 import { createSubjectCrypto } from '../src/core/subject_crypto.js'
 
+function resolveAuditConfig(app: ApplicationService): Promise<ResolvedAuditConfig> {
+  const provider = app.config.get('audit')
+  return configProvider.resolve(app, provider) as Promise<ResolvedAuditConfig>
+}
 export default class AuditProvider {
   #outboxDrainer?: AuditOutboxDrainer
 
   constructor(protected app: ApplicationService) {}
 
   register() {
+    this.app.container.singleton('audit.config', async () => {
+      return resolveAuditConfig(this.app)
+    })
+
     this.app.container.singleton('audit.manager', async () => {
       const config = await this.app.container.make('audit.config')
       return new StoreManager(config)

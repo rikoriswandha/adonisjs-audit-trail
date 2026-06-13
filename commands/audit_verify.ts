@@ -9,6 +9,7 @@ import type { ResolvedAuditConfig } from '../src/define_config.js'
 export default class AuditVerify extends BaseCommand {
   static commandName = 'audit:verify'
   static description = 'Verify audit trail hash chain integrity'
+  static options = { startApp: true as const }
 
   @flags.string({ description: 'Stream to verify' })
   declare stream: string | undefined

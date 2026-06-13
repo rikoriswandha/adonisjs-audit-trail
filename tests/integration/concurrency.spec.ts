@@ -91,7 +91,10 @@ function runConcurrencyTests(): void {
         assert.equal(rows.length, perApp * 2)
 
         const seqs = rows.map((row: Audit) => row.seq)
-        assert.deepEqual(seqs, Array.from({ length: perApp * 2 }, (_, i) => i + 1))
+        assert.deepEqual(
+          seqs,
+          Array.from({ length: perApp * 2 }, (_, i) => i + 1)
+        )
 
         const reports = []
         for await (const report of store1.verify('default')) {

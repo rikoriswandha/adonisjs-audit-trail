@@ -4,6 +4,7 @@ import type AuditOutboxDrainer from '../src/core/outbox_drainer.js'
 export default class AuditReplayOutbox extends BaseCommand {
   static commandName = 'audit:replay-outbox'
   static description = 'Replay pending transactional outbox events'
+  static options = { startApp: true as const }
 
   @flags.number({ description: 'Maximum events to replay' })
   declare limit: number | undefined

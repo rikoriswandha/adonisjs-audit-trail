@@ -12,8 +12,10 @@
 |
 */
 
+import { fileURLToPath } from 'node:url'
 import type Configure from '@adonisjs/core/commands/configure'
-import { stubsRoot } from './stubs/main.ts'
+
+const stubsRoot = fileURLToPath(new URL('./stubs/', import.meta.url))
 
 export async function configure(command: Configure) {
   const outbox = await command.prompt.confirm(
