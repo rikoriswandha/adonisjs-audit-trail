@@ -3,14 +3,17 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import AuditPipeline from '../../src/core/pipeline.js'
+import AuditPipeline, {
+  type PipelineEmitter,
+  type PipelineStoreRoute,
+} from '../../src/core/pipeline.js'
 import type { AuditEvent, AuditStoreContract, OverflowStrategy } from '../../src/types.js'
 
 interface FakeStore extends AuditStoreContract {
   failNext(count: number): void
 }
 
-function event(id: string): AuditEvent {
+function event(id: string, overrides: Partial<AuditEvent> = {}): AuditEvent {
   return {
     id,
     event: 'test',
@@ -31,6 +34,7 @@ function event(id: string): AuditEvent {
     tags: [],
     schemaVersion: '1',
     createdAt: new Date().toISOString(),
+    ...overrides,
   }
 }
 
@@ -78,6 +82,8 @@ function createPipeline(
     capacity?: number
     overflow?: OverflowStrategy
     deadLetterHandler?: (events: AuditEvent[]) => void
+    routeStore?: (event: AuditEvent) => PipelineStoreRoute
+    emitter?: PipelineEmitter
   } = {}
 ) {
   return new AuditPipeline(
@@ -91,8 +97,25 @@ function createPipeline(
     {
       store,
       deadLetterHandler: overrides.deadLetterHandler,
+      routeStore: overrides.routeStore,
+      emitter: overrides.emitter,
     }
   )
+}
+
+function createEmitter(): {
+  emitter: PipelineEmitter
+  emitted: { event: string; payload: unknown }[]
+} {
+  const emitted: { event: string; payload: unknown }[] = []
+  return {
+    emitted,
+    emitter: {
+      async emit(name, payload) {
+        emitted.push({ event: String(name), payload })
+      },
+    },
+  }
 }
 
 function sleep(ms: number): Promise<void> {
@@ -275,5 +298,58 @@ test.group('AuditPipeline', () => {
     await pipeline.shutdown()
 
     assert.equal(writes[0][0].newValues?.password, '[REDACTED]')
+  })
+
+  test('routes flush groups to their selected store', async ({ assert }) => {
+    const primary = createFakeStore()
+    const secondary = createFakeStore()
+    const pipeline = createPipeline(primary.store, {
+      maxBatchSize: 4,
+      routeStore: (queued) =>
+        queued.stream === 'secondary'
+          ? { name: 'secondary', store: secondary.store }
+          : { name: 'primary', store: primary.store },
+    })
+
+    pipeline.enqueue(event('a'))
+    pipeline.enqueue(event('b'))
+    pipeline.enqueue(event('c', { stream: 'secondary' }))
+    await pipeline.shutdown()
+
+    assert.deepEqual(
+      primary.writes.flat().map((queued) => queued.id),
+      ['a', 'b']
+    )
+    assert.deepEqual(
+      secondary.writes.flat().map((queued) => queued.id),
+      ['c']
+    )
+  })
+
+  test('emits flushed, dropped, and dead letter events', async ({ assert }) => {
+    const { emitter, emitted } = createEmitter()
+    const { store } = createFakeStore()
+    const pipeline = createPipeline(store, { capacity: 1, overflow: 'dropNew', emitter })
+
+    pipeline.enqueue(event('a'))
+    pipeline.enqueue(event('b'))
+    await pipeline.shutdown()
+
+    assert.includeMembers(
+      emitted.map((entry) => entry.event),
+      ['audit:dropped', 'audit:flushed']
+    )
+
+    const deadLetterEmitter = createEmitter()
+    const failing = createFakeStore()
+    const deadLetterPipeline = createPipeline(failing.store, { emitter: deadLetterEmitter.emitter })
+    failing.store.failNext(10)
+    deadLetterPipeline.enqueue(event('c'))
+    await deadLetterPipeline.shutdown()
+
+    assert.include(
+      deadLetterEmitter.emitted.map((entry) => entry.event),
+      'audit:dead_letter'
+    )
   })
 })

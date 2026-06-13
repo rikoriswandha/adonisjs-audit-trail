@@ -65,7 +65,7 @@ test.group('LucidStore', (group) => {
     const store = useStore(await app.container.make('audit.manager'))
     const events = [makeEvent(), makeEvent()]
 
-    const chained = await store.write(events, { getHead: () => store.head('default') })
+    const chained = await store.write(events)
     assert.lengthOf(chained, 2)
     assert.equal(chained[0].seq, 1)
     assert.equal(chained[1].seq, 2)
@@ -81,7 +81,7 @@ test.group('LucidStore', (group) => {
 
   test('head returns latest seq and hash', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent(), makeEvent()], { getHead: () => store.head('default') })
+    await store.write([makeEvent(), makeEvent()])
 
     const head = await store.head('default')
     assert.isNotNull(head)
@@ -91,7 +91,7 @@ test.group('LucidStore', (group) => {
 
   test('verify reports valid chain', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent(), makeEvent()], { getHead: () => store.head('default') })
+    await store.write([makeEvent(), makeEvent()])
 
     const reports = []
     for await (const report of store.verify('default')) {
@@ -105,10 +105,11 @@ test.group('LucidStore', (group) => {
 
   test('verify supports ranges starting after genesis', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write(
-      [makeEvent({ id: 'range-1' }), makeEvent({ id: 'range-2' }), makeEvent({ id: 'range-3' })],
-      { getHead: () => store.head('default') }
-    )
+    await store.write([
+      makeEvent({ id: 'range-1' }),
+      makeEvent({ id: 'range-2' }),
+      makeEvent({ id: 'range-3' }),
+    ])
 
     const reports = []
     for await (const report of store.verify('default', { fromSeq: 2 })) {
@@ -122,7 +123,7 @@ test.group('LucidStore', (group) => {
 
   test('verify detects corruption', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent()], { getHead: () => store.head('default') })
+    await store.write([makeEvent()])
 
     const row = await Audit.query().firstOrFail()
     const db = await app.container.make('lucid.db')
@@ -144,7 +145,7 @@ test.group('LucidStore', (group) => {
 
   test('model save and delete are rejected', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent()], { getHead: () => store.head('default') })
+    await store.write([makeEvent()])
 
     const row = await Audit.query().firstOrFail()
 
@@ -165,7 +166,7 @@ test.group('LucidStore', (group) => {
 
   test('query builder update and delete are rejected', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent()], { getHead: () => store.head('default') })
+    await store.write([makeEvent()])
 
     await assert.rejects(
       () => Audit.query().where('event', 'user.created').update({ actor_label: 'changed' }),
@@ -176,8 +177,8 @@ test.group('LucidStore', (group) => {
 
   test('query filters by event and stream', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent({ event: 'a' })], { getHead: () => store.head('default') })
-    await store.write([makeEvent({ event: 'b' })], { getHead: () => store.head('default') })
+    await store.write([makeEvent({ event: 'a' })])
+    await store.write([makeEvent({ event: 'b' })])
 
     const rows = await store.query({ event: 'a' })
     assert.lengthOf(rows, 1)
@@ -188,11 +189,11 @@ test.group('LucidStore', (group) => {
     const store = useStore(await app.container.make('audit.manager'))
     const old = makeEvent()
     old.createdAt = new Date(Date.now() - 1000 * 60 * 60 * 24 * 2).toISOString()
-    await store.write([old], { getHead: () => store.head('default') })
+    await store.write([old])
 
     const recent = makeEvent()
     recent.createdAt = new Date().toISOString()
-    await store.write([recent], { getHead: () => store.head('default') })
+    await store.write([recent])
 
     const report = await store.prune({ default: '1 day' })
     assert.equal(report.totalPruned, 1)
@@ -204,8 +205,8 @@ test.group('LucidStore', (group) => {
 
   test('multi-stream chains are independent', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    const a = await store.write([makeEvent({ stream: 'a' })], { getHead: () => store.head('a') })
-    const b = await store.write([makeEvent({ stream: 'b' })], { getHead: () => store.head('b') })
+    const a = await store.write([makeEvent({ stream: 'a' })])
+    const b = await store.write([makeEvent({ stream: 'b' })])
 
     assert.equal(a[0].seq, 1)
     assert.equal(b[0].seq, 1)

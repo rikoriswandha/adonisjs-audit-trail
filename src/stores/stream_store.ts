@@ -1,7 +1,6 @@
 import type {
   AuditEvent,
   AuditStoreContract,
-  ChainContext,
   ChainedAuditEvent,
   ResolvedRetentionPolicy,
   VerifyReport,
@@ -9,7 +8,7 @@ import type {
 } from '../types.js'
 
 export default class StreamStore implements AuditStoreContract {
-  async write(_batch: AuditEvent[], _chainCtx: ChainContext): Promise<ChainedAuditEvent[]> {
+  async write(_batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
     throw new Error('StreamStore.write: not implemented')
   }
 

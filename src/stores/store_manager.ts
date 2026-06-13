@@ -1,4 +1,4 @@
-import type { AuditStoreContract } from '../types.js'
+import type { AuditEvent, AuditStoreContract } from '../types.js'
 import type { ResolvedAuditConfig } from '../define_config.js'
 
 export default class StoreManager {
@@ -15,6 +15,12 @@ export default class StoreManager {
     const store = this.#stores[storeName]
     if (!store) throw new Error(`Audit store "${storeName}" is not configured`)
     return store
+  }
+
+  route(event: AuditEvent): { name: string; store: AuditStoreContract } {
+    const routed = event.metadata?.auditStore
+    const storeName = typeof routed === 'string' ? routed : this.#default
+    return { name: storeName, store: this.use(storeName) }
   }
 
   get default(): string {

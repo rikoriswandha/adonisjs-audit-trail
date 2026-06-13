@@ -65,12 +65,8 @@ test.group('Audit model scopes', (group) => {
   test('forModel scopes by type and id', async ({ assert }) => {
     const post = await Post.create({ title: 'Hello', body: null })
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent({ auditableType: 'Post', auditableId: String(post.id) })], {
-      getHead: () => store.head('default'),
-    })
-    await store.write([makeEvent({ auditableType: 'Post', auditableId: '999' })], {
-      getHead: () => store.head('default'),
-    })
+    await store.write([makeEvent({ auditableType: 'Post', auditableId: String(post.id) })])
+    await store.write([makeEvent({ auditableType: 'Post', auditableId: '999' })])
 
     const rows = await Audit.query().apply((scopes) => scopes.forModel(post))
     assert.lengthOf(rows, 1)
@@ -79,8 +75,8 @@ test.group('Audit model scopes', (group) => {
 
   test('inTenant scopes by tenantId', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent({ tenantId: 'acme' })], { getHead: () => store.head('default') })
-    await store.write([makeEvent({ tenantId: 'globex' })], { getHead: () => store.head('default') })
+    await store.write([makeEvent({ tenantId: 'acme' })])
+    await store.write([makeEvent({ tenantId: 'globex' })])
 
     const rows = await Audit.query().apply((scopes) => scopes.inTenant('acme'))
     assert.lengthOf(rows, 1)
@@ -89,12 +85,8 @@ test.group('Audit model scopes', (group) => {
 
   test('event scope filters by event name', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
-    await store.write([makeEvent({ event: 'user.created' })], {
-      getHead: () => store.head('default'),
-    })
-    await store.write([makeEvent({ event: 'user.deleted' })], {
-      getHead: () => store.head('default'),
-    })
+    await store.write([makeEvent({ event: 'user.created' })])
+    await store.write([makeEvent({ event: 'user.deleted' })])
 
     const rows = await Audit.query().apply((scopes) => scopes.event('user.created'))
     assert.lengthOf(rows, 1)

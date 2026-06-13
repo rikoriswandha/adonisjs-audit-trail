@@ -1,8 +1,13 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import type { AuditEvent, OverflowStrategy, PipelineStats } from '../types.js'
-import type { AuditStoreContract } from '../types.js'
+import type {
+  AuditEvent,
+  AuditRuntimeEvents,
+  AuditStoreContract,
+  OverflowStrategy,
+  PipelineStats,
+} from '../types.js'
 import { AuditCoupledTimeoutError } from './errors.js'
 
 export interface PipelineConfig {
@@ -13,18 +18,35 @@ export interface PipelineConfig {
   retryBaseDelayMs?: number
 }
 
+export interface PipelineStoreRoute {
+  name: string
+  store: AuditStoreContract
+}
+
+export interface PipelineEmitter {
+  emit<Name extends keyof AuditRuntimeEvents>(
+    event: Name,
+    payload: AuditRuntimeEvents[Name]
+  ): Promise<void>
+}
+
 export interface PipelineDependencies {
   store: AuditStoreContract
+  storeName?: string
+  routeStore?: (event: AuditEvent) => PipelineStoreRoute
   redactor?: { redact: (data: Record<string, unknown>) => Record<string, unknown> }
   deadLetterHandler?: (events: AuditEvent[]) => void
+  emitter?: PipelineEmitter
 }
 
 export default class AuditPipeline {
   #config: PipelineConfig
   #store: AuditStoreContract
+  #storeName: string
+  #routeStore: (event: AuditEvent) => PipelineStoreRoute
   #redactor?: { redact: (data: Record<string, unknown>) => Record<string, unknown> }
   #deadLetterHandler: (events: AuditEvent[]) => void
-
+  #emitter?: PipelineEmitter
   #buffer: AuditEvent[]
   #head = 0
   #tail = 0
@@ -46,8 +68,11 @@ export default class AuditPipeline {
   constructor(config: PipelineConfig, deps: PipelineDependencies) {
     this.#config = config
     this.#store = deps.store
+    this.#storeName = deps.storeName ?? 'default'
+    this.#routeStore = deps.routeStore ?? (() => ({ name: this.#storeName, store: this.#store }))
     this.#redactor = deps.redactor
     this.#deadLetterHandler = deps.deadLetterHandler ?? defaultDeadLetterHandler
+    this.#emitter = deps.emitter
     this.#buffer = new Array(config.capacity)
   }
 
@@ -134,6 +159,7 @@ export default class AuditPipeline {
       const pending = this.#drainBuffer()
       this.#deadLetterHandler(pending)
       this.#deadLettered += pending.length
+      this.#emit('audit:dead_letter', { events: pending, count: pending.length, error: null })
     }
   }
 
@@ -158,14 +184,16 @@ export default class AuditPipeline {
     }
   }
 
-  #handleOverflow(_event: AuditEvent): boolean {
+  #handleOverflow(event: AuditEvent): boolean {
     if (this.#config.overflow === 'dropNew') {
       this.#dropped++
+      this.#emit('audit:dropped', { strategy: 'dropNew', count: 1, event })
       return false
     }
 
     if (this.#config.overflow === 'dropOldest') {
-      this.#dropOldest()
+      const dropped = this.#dropOldest()
+      this.#emit('audit:dropped', { strategy: 'dropOldest', count: 1, event: dropped })
       return true
     }
 
@@ -173,17 +201,20 @@ export default class AuditPipeline {
       void this.#flush()
       if (this.#size < this.#config.capacity) return true
       this.#dropped++
+      this.#emit('audit:dropped', { strategy: 'block', count: 1, event })
       return false
     }
 
     return false
   }
 
-  #dropOldest(): void {
+  #dropOldest(): AuditEvent {
+    const dropped = this.#buffer[this.#head]
     this.#buffer[this.#head] = undefined as unknown as AuditEvent
     this.#head = (this.#head + 1) % this.#config.capacity
     this.#size--
     this.#dropped++
+    return dropped
   }
 
   static createFileDeadLetterHandler(dlqPath: string): (events: AuditEvent[]) => void {
@@ -195,28 +226,62 @@ export default class AuditPipeline {
     this.#flushing = true
 
     const batch = this.#drainBuffer()
-    const eventIds = batch.map((e) => e.id)
+    const groups = this.#groupByStore(batch)
 
+    try {
+      for (const group of groups.values()) {
+        await this.#writeWithRetry(group.name, group.store, group.events)
+      }
+    } finally {
+      this.#flushing = false
+    }
+  }
+
+  #groupByStore(batch: AuditEvent[]): Map<string, PipelineStoreRoute & { events: AuditEvent[] }> {
+    const groups = new Map<string, PipelineStoreRoute & { events: AuditEvent[] }>()
+
+    for (const event of batch) {
+      const route = this.#routeStore(event)
+      const existing = groups.get(route.name)
+      if (existing) {
+        existing.events.push(event)
+        continue
+      }
+
+      groups.set(route.name, { ...route, events: [event] })
+    }
+
+    return groups
+  }
+
+  async #writeWithRetry(
+    storeName: string,
+    store: AuditStoreContract,
+    batch: AuditEvent[]
+  ): Promise<void> {
+    const eventIds = batch.map((event) => event.id)
     let attempts = 0
     const maxAttempts = 5
     const baseDelay = this.#config.retryBaseDelayMs ?? 100
+    let lastError: unknown = null
 
     while (attempts < maxAttempts) {
       try {
-        await this.#store.write(batch, { getHead: (stream) => this.#store.head(stream) })
+        const chained = await store.write(batch)
         this.#written += batch.length
         this.#lastFlushAt = new Date()
+        this.#emit('audit:flushed', { store: storeName, events: chained, count: chained.length })
         this.#resolveCoupled(eventIds)
-        this.#flushing = false
         return
       } catch (error) {
+        lastError = error
         attempts++
         this.#retried++
 
         if (attempts >= maxAttempts) {
           this.#deadLetterHandler(batch)
           this.#deadLettered += batch.length
-          this.#flushing = false
+          this.#emit('audit:dead_letter', { events: batch, count: batch.length, error: lastError })
           return
         }
 
@@ -239,6 +304,14 @@ export default class AuditPipeline {
     }
 
     return batch
+  }
+
+  #emit<Name extends keyof AuditRuntimeEvents>(
+    event: Name,
+    payload: AuditRuntimeEvents[Name]
+  ): void {
+    if (!this.#emitter) return
+    void this.#emitter.emit(event, payload).catch(() => {})
   }
 
   #resolveCoupled(eventIds: string[]): void {

@@ -2,11 +2,14 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import '../src/types/container_bindings.js'
 import StoreManager from '../src/stores/store_manager.js'
 import AuditPipeline from '../src/core/pipeline.js'
+import AuditOutboxDrainer from '../src/core/outbox_drainer.js'
 import AuditService from '../src/services/audit.js'
 import { auditContext } from '../src/audit_context.js'
 import { createRedactor } from '../src/core/redactor.js'
 
 export default class AuditProvider {
+  #outboxDrainer?: AuditOutboxDrainer
+
   constructor(protected app: ApplicationService) {}
 
   register() {
@@ -20,11 +23,15 @@ export default class AuditProvider {
       const manager = await this.app.container.make('audit.manager')
       const redactor = await this.app.container.make('audit.redactor')
       const dlqPath = this.app.makePath('storage/audit-dlq')
+      const emitter = await this.app.container.make('emitter')
 
       return new AuditPipeline(config.queue, {
         store: manager.use(),
+        storeName: manager.default,
+        routeStore: (event) => manager.route(event),
         redactor,
         deadLetterHandler: AuditPipeline.createFileDeadLetterHandler(dlqPath),
+        emitter,
       })
     })
 
@@ -38,6 +45,10 @@ export default class AuditProvider {
       })
     })
 
+    this.app.container.singleton('audit.outbox_drainer', async () => {
+      const manager = await this.app.container.make('audit.manager')
+      return new AuditOutboxDrainer(this.app, manager.use())
+    })
     this.app.container.singleton('audit', async () => {
       const config = await this.app.container.make('audit.config')
       const manager = await this.app.container.make('audit.manager')
@@ -57,11 +68,19 @@ export default class AuditProvider {
   }
 
   async start() {
+    const config = await this.app.container.make('audit.config')
     const pipeline = await this.app.container.make('audit.pipeline')
     pipeline.start()
+
+    if (config.guarantee === 'transactional-outbox') {
+      this.#outboxDrainer = await this.app.container.make('audit.outbox_drainer')
+      await this.#outboxDrainer.drain()
+      this.#outboxDrainer.start()
+    }
   }
 
   async shutdown() {
+    this.#outboxDrainer?.stop()
     const pipeline = await this.app.container.make('audit.pipeline')
     await pipeline.shutdown(5000)
   }

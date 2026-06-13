@@ -4,6 +4,7 @@ import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
 import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
+import type { AuditEvent } from '../../src/types.js'
 import { auditContext } from '../../src/audit_context.js'
 
 async function createLucidApp() {
@@ -18,6 +19,31 @@ async function createLucidApp() {
   })
   await runMigrations(app)
   return app
+}
+
+function makeOutboxEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
+  return {
+    id: '0192c6a0-0000-7fff-a000-000000000101',
+    event: 'outbox.replayed',
+    stream: 'default',
+    auditableType: null,
+    auditableId: null,
+    oldValues: null,
+    newValues: { ok: true },
+    metadata: null,
+    actor: { type: 'system', id: null },
+    tenantId: null,
+    requestId: null,
+    correlationId: null,
+    ipAddress: null,
+    userAgent: null,
+    url: null,
+    httpMethod: null,
+    tags: [],
+    schemaVersion: '1',
+    createdAt: new Date().toISOString(),
+    ...overrides,
+  }
 }
 
 test.group('AuditProvider', (group) => {
@@ -105,5 +131,43 @@ test.group('AuditProvider', (group) => {
     assert.equal(pipeline.stats().written, 1)
 
     app = await createLucidApp()
+  })
+
+  test('transactional outbox drainer replays pending rows', async ({ assert }) => {
+    await cleanupTestApp(app)
+    app = await createTestApp({
+      default: 'lucid',
+      guarantee: 'transactional-outbox',
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
+      },
+    })
+    await runMigrations(app)
+
+    const db = await app.container.make('lucid.db')
+    const client = db.connection()
+    await client
+      .insertQuery()
+      .table('audit_outbox')
+      .insert({
+        payload: JSON.stringify(makeOutboxEvent()),
+        attempts: 0,
+        created_at: new Date().toISOString(),
+      })
+
+    const drainer = await app.container.make('audit.outbox_drainer')
+    const processed = await drainer.drain()
+
+    const row = await Audit.query().where('event', 'outbox.replayed').first()
+    const outboxRows = await client.query().from('audit_outbox')
+
+    assert.equal(processed, 1)
+    assert.isNotNull(row)
+    assert.equal(row!.seq, 1)
+    assert.isNotNull(outboxRows[0].processed_at)
+    assert.equal(outboxRows[0].attempts, 1)
   })
 })

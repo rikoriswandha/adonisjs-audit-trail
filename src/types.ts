@@ -38,15 +38,11 @@ export interface ChainedAuditEvent extends AuditEvent {
 
 // --- Store contract ---
 export interface AuditStoreContract {
-  write(batch: AuditEvent[], chainCtx: ChainContext): Promise<ChainedAuditEvent[]>
+  write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]>
   head(stream: string): Promise<{ seq: number; hash: string } | null>
   verify(stream: string, range?: { fromSeq?: number; toSeq?: number }): AsyncIterable<VerifyReport>
   prune(policy: ResolvedRetentionPolicy): Promise<PruneReport>
   query?(filters: AuditQueryFilters): Promise<ChainedAuditEvent[]>
-}
-
-export interface ChainContext {
-  getHead(stream: string): Promise<{ seq: number; hash: string } | null>
 }
 
 // --- Config ---
@@ -136,6 +132,33 @@ export interface PipelineStats {
   retried: number
   deadLettered: number
   lastFlushAt: Date | null
+}
+export interface AuditFlushedEvent {
+  store: string
+  events: ChainedAuditEvent[]
+  count: number
+}
+
+export interface AuditDroppedEvent {
+  strategy: OverflowStrategy
+  count: number
+  event: AuditEvent
+}
+
+export interface AuditDeadLetterEvent {
+  events: AuditEvent[]
+  count: number
+  error: unknown
+}
+
+export interface AuditRuntimeEvents {
+  'audit:flushed': AuditFlushedEvent
+  'audit:dropped': AuditDroppedEvent
+  'audit:dead_letter': AuditDeadLetterEvent
+}
+
+declare module '@adonisjs/core/types' {
+  export interface EventsList extends AuditRuntimeEvents {}
 }
 
 export interface RetentionPolicy {

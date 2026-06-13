@@ -40,6 +40,7 @@ test.group('defineConfig', function (group) {
       stores: {
         memory: memoryFactory,
       },
+      default: 'memory',
     })
 
     const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
@@ -57,6 +58,7 @@ test.group('defineConfig', function (group) {
           return { type: 'memory' }
         }),
       },
+      default: 'memory',
     })
 
     const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
@@ -69,15 +71,15 @@ test.group('defineConfig', function (group) {
   test('applies default values', async function ({ assert }) {
     const provider = defineConfig({
       stores: {
-        memory: memoryFactory,
+        lucid: memoryFactory,
       },
     })
 
     const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
-      memory: typeof memoryFactory
+      lucid: typeof memoryFactory
     }>
 
-    assert.equal(resolved.default, 'memory')
+    assert.equal(resolved.default, 'lucid')
     assert.equal(resolved.guarantee, 'best-effort')
     assert.deepEqual(resolved.redaction, {
       global: [],
@@ -95,17 +97,14 @@ test.group('defineConfig', function (group) {
     assert.equal(resolved.payloadMaxBytes, 32_768)
   })
 
-  test('unimplemented store helpers throw', async function ({ assert }) {
-    const unimplemented = ['stream', 'http', 'fanout'] as const
-    for (const name of unimplemented) {
+  test('store helpers resolve store instances', async function ({ assert }) {
+    const helpers = ['stream', 'http', 'fanout'] as const
+    for (const name of helpers) {
       const factory = stores[name]
       const provider = factory({})
-      await assert.rejects(
-        async function () {
-          return configProvider.resolve(app, provider)
-        },
-        new RegExp(`${name}Store not implemented yet`, 'i')
-      )
+      const resolved = await configProvider.resolve(app, provider)
+      assert.isDefined(resolved)
+      assert.equal(typeof (resolved as AuditStoreContract).write, 'function')
     }
   })
 
@@ -121,6 +120,7 @@ test.group('defineConfig', function (group) {
       stores: {
         memory: memoryFactory,
       },
+      default: 'memory',
     })
 
     const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{

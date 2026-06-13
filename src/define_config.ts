@@ -63,8 +63,13 @@ export function defineConfig<
       }
     }
 
+    const defaultStore = (config.default ?? 'lucid') as keyof KnownStores
+    if (!Object.hasOwn(config.stores, defaultStore)) {
+      throw new Error(`Default audit store "${String(defaultStore)}" is not configured`)
+    }
+
     return {
-      default: (config.default ?? Object.keys(config.stores)[0]) as keyof KnownStores,
+      default: defaultStore,
       guarantee: config.guarantee ?? 'best-effort',
       stores: resolvedStores as ResolvedAuditConfig<KnownStores>['stores'],
       redaction: {
@@ -100,6 +105,10 @@ export interface LucidStoreOptions {
   enforceImmutability?: boolean
 }
 
+export type StreamStoreOptions = Record<string, never>
+export type HttpStoreOptions = Record<string, never>
+export type FanoutStoreOptions = Record<string, never>
+
 export const stores = {
   lucid: (opts: LucidStoreOptions = {}) =>
     configProvider.create(async (app: ApplicationService) => {
@@ -110,16 +119,19 @@ export const stores = {
       })
       return new LucidStore(app, opts)
     }),
-  stream: (_opts: Record<string, unknown>) =>
+  stream: (_opts: StreamStoreOptions = {}) =>
     configProvider.create(async () => {
-      throw new Error('StreamStore not implemented yet')
+      const { default: StreamStore } = await import('./stores/stream_store.js')
+      return new StreamStore()
     }),
-  http: (_opts: Record<string, unknown>) =>
+  http: (_opts: HttpStoreOptions = {}) =>
     configProvider.create(async () => {
-      throw new Error('HttpStore not implemented yet')
+      const { default: HttpStore } = await import('./stores/http_store.js')
+      return new HttpStore()
     }),
-  fanout: (_opts: Record<string, unknown>) =>
+  fanout: (_opts: FanoutStoreOptions = {}) =>
     configProvider.create(async () => {
-      throw new Error('FanoutStore not implemented yet')
+      const { default: FanoutStore } = await import('./stores/fanout_store.js')
+      return new FanoutStore()
     }),
 }

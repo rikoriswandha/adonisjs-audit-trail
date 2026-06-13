@@ -4,7 +4,6 @@ import type {
   AuditEvent,
   AuditQueryFilters,
   AuditStoreContract,
-  ChainContext,
   ChainedAuditEvent,
   PruneReport,
   ResolvedRetentionPolicy,
@@ -121,7 +120,7 @@ export default class LucidStore implements AuditStoreContract {
     this.#table = opts.table ?? 'audits'
   }
 
-  async write(batch: AuditEvent[], _chainCtx: ChainContext): Promise<ChainedAuditEvent[]> {
+  async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
     const byStream = new Map<string, AuditEvent[]>()
 
     for (const event of batch) {
