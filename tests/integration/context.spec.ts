@@ -1,6 +1,9 @@
 import { test } from '@japa/runner'
 import { auditContext } from '../../src/audit_context.js'
 import type { AuditActor } from '../../src/types.js'
+import AuditContextMiddleware from '../../src/middleware/audit_context_middleware.js'
+import { createTestApp, cleanupTestApp } from '../helpers/app.js'
+import type { HttpContext } from '@adonisjs/core/http'
 
 test.group('AuditContext', () => {
   test('run stores and get retrieves actor', async ({ assert }) => {
@@ -43,6 +46,31 @@ test.group('AuditContext', () => {
       assert.equal(auditContext.get()?.requestId, 'before')
       assert.equal(auditContext.get()?.tenantId, 'acme')
     })
+  })
+
+  test('middleware stores tenant from configured resolver', async ({ assert }) => {
+    const app = await createTestApp({
+      tenantResolver: () => 'tenant-1',
+    })
+
+    try {
+      const middleware = new AuditContextMiddleware(app)
+      const ctx = {
+        request: {
+          id: () => 'request-1',
+          ip: () => '127.0.0.1',
+          header: () => undefined,
+          url: () => '/posts',
+          method: () => 'GET',
+        },
+      } as unknown as HttpContext
+
+      await middleware.handle(ctx, async () => {
+        assert.equal(auditContext.get()?.tenantId, 'tenant-1')
+      })
+    } finally {
+      await cleanupTestApp(app)
+    }
   })
 
   test('get returns undefined outside context', async ({ assert }) => {

@@ -1,4 +1,8 @@
 import { test } from '@japa/runner'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import AuditPipeline from '../../src/core/pipeline.js'
 import type { AuditEvent, AuditStoreContract, OverflowStrategy } from '../../src/types.js'
 
@@ -154,6 +158,23 @@ test.group('AuditPipeline', () => {
     assert.equal(pipeline.stats().dropped, 1)
   })
 
+  test('block overflow flushes without stalling the event loop', async ({ assert }) => {
+    const { store, writes } = createFakeStore()
+    const pipeline = createPipeline(store, { capacity: 1, overflow: 'block' })
+    const startedAt = Date.now()
+
+    assert.isTrue(pipeline.enqueue(event('a')))
+    assert.isTrue(pipeline.enqueue(event('b')))
+    await pipeline.shutdown()
+
+    assert.isBelow(Date.now() - startedAt, 100)
+    assert.equal(pipeline.stats().dropped, 0)
+    assert.deepEqual(
+      writes.flat().map((queued) => queued.id),
+      ['a', 'b']
+    )
+  })
+
   test('retries failed writes and succeeds', async ({ assert }) => {
     const { store, writes } = createFakeStore()
     const pipeline = createPipeline(store)
@@ -181,6 +202,23 @@ test.group('AuditPipeline', () => {
     assert.equal(deadLetters.length, 1)
     assert.equal(deadLetters[0][0].id, 'a')
     assert.equal(pipeline.stats().deadLettered, 1)
+  })
+
+  test('file dead-letter handler writes NDJSON batches', async ({ assert }) => {
+    const directory = mkdtempSync(join(tmpdir(), 'audit-dlq-'))
+    const dlqPath = join(directory, 'audit-dlq')
+
+    try {
+      const handler = AuditPipeline.createFileDeadLetterHandler(dlqPath)
+      handler([event('a'), event('b')])
+
+      const lines = readFileSync(dlqPath, 'utf8').trim().split('\n')
+      assert.lengthOf(lines, 2)
+      assert.equal(JSON.parse(lines[0]).id, 'a')
+      assert.equal(JSON.parse(lines[1]).id, 'b')
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test('shutdown drains pending events', async ({ assert }) => {

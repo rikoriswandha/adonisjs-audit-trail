@@ -1,3 +1,6 @@
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
+
 import type { AuditEvent, OverflowStrategy, PipelineStats } from '../types.js'
 import type { AuditStoreContract } from '../types.js'
 import { AuditCoupledTimeoutError } from './errors.js'
@@ -52,7 +55,7 @@ export default class AuditPipeline {
     if (this.#started) return
     this.#started = true
     this.#flushTimer = setInterval(() => {
-      this.#flush().catch(() => {})
+      void this.#flush()
     }, this.#config.flushIntervalMs)
     this.#flushTimer.unref()
   }
@@ -73,7 +76,7 @@ export default class AuditPipeline {
     this.#queued++
 
     if (this.#size >= this.#config.maxBatchSize) {
-      this.#flush().catch(() => {})
+      void this.#flush()
     }
 
     return true
@@ -100,7 +103,7 @@ export default class AuditPipeline {
       this.#coupled.set(id, wrappedResolve)
     }
 
-    this.#flush().catch(() => {})
+    void this.#flush()
 
     const timeout = setTimeout(() => {
       if (resolved) return
@@ -155,7 +158,7 @@ export default class AuditPipeline {
     }
   }
 
-  #handleOverflow(event: AuditEvent): boolean {
+  #handleOverflow(_event: AuditEvent): boolean {
     if (this.#config.overflow === 'dropNew') {
       this.#dropped++
       return false
@@ -167,7 +170,10 @@ export default class AuditPipeline {
     }
 
     if (this.#config.overflow === 'block') {
-      return this.#blockUntilSpace(event)
+      void this.#flush()
+      if (this.#size < this.#config.capacity) return true
+      this.#dropped++
+      return false
     }
 
     return false
@@ -180,18 +186,8 @@ export default class AuditPipeline {
     this.#dropped++
   }
 
-  #blockUntilSpace(event: AuditEvent): boolean {
-    const deadline = Date.now() + 5000
-    while (this.#size >= this.#config.capacity && Date.now() < deadline) {
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
-    }
-
-    if (this.#size >= this.#config.capacity) {
-      this.#dropped++
-      return false
-    }
-
-    return this.enqueue(event)
+  static createFileDeadLetterHandler(dlqPath: string): (events: AuditEvent[]) => void {
+    return (events) => appendDeadLetters(dlqPath, events)
   }
 
   async #flush(): Promise<void> {
@@ -261,16 +257,13 @@ export default class AuditPipeline {
 }
 
 function defaultDeadLetterHandler(events: AuditEvent[]): void {
-  const line = events.map((e) => JSON.stringify(e)).join('\n')
-  try {
-    const fs = require('node:fs')
-    const path = require('node:path')
-    const dlqPath = path.join(process.cwd(), 'storage', 'audit-dlq')
-    fs.mkdirSync(path.dirname(dlqPath), { recursive: true })
-    fs.appendFileSync(dlqPath, line + '\n')
-  } catch {
-    // Last resort: silently drop if filesystem is unavailable
-  }
+  appendDeadLetters('storage/audit-dlq', events)
+}
+
+function appendDeadLetters(dlqPath: string, events: AuditEvent[]): void {
+  const line = events.map((event) => JSON.stringify(event)).join('\n')
+  mkdirSync(dirname(dlqPath), { recursive: true })
+  appendFileSync(dlqPath, `${line}\n`)
 }
 
 function sleep(ms: number): Promise<void> {

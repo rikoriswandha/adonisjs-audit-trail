@@ -18,7 +18,14 @@ export default class AuditProvider {
     this.app.container.singleton('audit.pipeline', async () => {
       const config = await this.app.container.make('audit.config')
       const manager = await this.app.container.make('audit.manager')
-      return new AuditPipeline(config.queue, { store: manager.use() })
+      const redactor = await this.app.container.make('audit.redactor')
+      const dlqPath = this.app.makePath('storage/audit-dlq')
+
+      return new AuditPipeline(config.queue, {
+        store: manager.use(),
+        redactor,
+        deadLetterHandler: AuditPipeline.createFileDeadLetterHandler(dlqPath),
+      })
     })
 
     this.app.container.singleton('audit.redactor', async () => {

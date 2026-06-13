@@ -103,12 +103,33 @@ test.group('LucidStore', (group) => {
     assert.equal(reports[reports.length - 1].checkedCount, 2)
   })
 
+  test('verify supports ranges starting after genesis', async ({ assert }) => {
+    const store = useStore(await app.container.make('audit.manager'))
+    await store.write(
+      [makeEvent({ id: 'range-1' }), makeEvent({ id: 'range-2' }), makeEvent({ id: 'range-3' })],
+      { getHead: () => store.head('default') }
+    )
+
+    const reports = []
+    for await (const report of store.verify('default', { fromSeq: 2 })) {
+      reports.push(report)
+    }
+
+    assert.lengthOf(reports, 2)
+    assert.isTrue(reports.every((report) => report.valid))
+    assert.equal(reports[0].checkedCount, 1)
+  })
+
   test('verify detects corruption', async ({ assert }) => {
     const store = useStore(await app.container.make('audit.manager'))
     await store.write([makeEvent()], { getHead: () => store.head('default') })
 
     const row = await Audit.query().firstOrFail()
-    await Audit.query()
+    const db = await app.container.make('lucid.db')
+    await db
+      .connection()
+      .query()
+      .from('audits')
       .where('id', row.id)
       .update({ hash: '0'.repeat(64) })
 
@@ -140,6 +161,17 @@ test.group('LucidStore', (group) => {
     } catch (err) {
       assert.include((err as Error).message, 'immutable')
     }
+  })
+
+  test('query builder update and delete are rejected', async ({ assert }) => {
+    const store = useStore(await app.container.make('audit.manager'))
+    await store.write([makeEvent()], { getHead: () => store.head('default') })
+
+    await assert.rejects(
+      () => Audit.query().where('event', 'user.created').update({ actor_label: 'changed' }),
+      /immutable/i
+    )
+    await assert.rejects(() => Audit.query().where('event', 'user.created').delete(), /immutable/i)
   })
 
   test('query filters by event and stream', async ({ assert }) => {

@@ -1,0 +1,29 @@
+{{{
+  exports({
+    to: app.makePath('database/migrations', `${Date.now() + 1}_create_audit_outbox_table.ts`)
+  })
+}}}
+import { BaseSchema } from '@adonisjs/lucid/schema'
+
+export default class extends BaseSchema {
+  protected tableName = 'audit_outbox'
+
+  async up() {
+    this.schema.createTable(this.tableName, (table) => {
+      table.uuid('id').primary()
+      table.jsonb('payload').notNullable()
+      table.integer('attempts').unsigned().notNullable().defaultTo(0)
+      table.timestamp('claimed_at', { useTz: true }).nullable()
+      table.timestamp('processed_at', { useTz: true }).nullable()
+      table.timestamp('created_at', { useTz: true }).notNullable()
+      table.timestamp('updated_at', { useTz: true }).nullable()
+
+      table.index(['processed_at', 'claimed_at'])
+      table.index(['created_at'])
+    })
+  }
+
+  async down() {
+    this.schema.dropTable(this.tableName)
+  }
+}

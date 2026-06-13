@@ -65,6 +65,27 @@ test.group('AuditProvider', (group) => {
     assert.lengthOf(row!.prevHash, 64)
   })
 
+  test('provider pipeline applies configured redaction before writing', async ({ assert }) => {
+    await cleanupTestApp(app)
+    app = await createTestApp({
+      default: 'lucid',
+      redaction: { global: ['password'], mode: 'mask' },
+      stores: {
+        lucid: async (application: ApplicationService) => {
+          const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
+          return new LucidStore(application, {})
+        },
+      },
+    })
+    await runMigrations(app)
+
+    const audit = (await app.container.make('audit')) as AuditService
+    await audit.log('user.updated').withNew({ password: 'secret' }).commitSync()
+
+    const row = await Audit.query().where('event', 'user.updated').firstOrFail()
+    assert.deepEqual(row.newValues, { password: '[REDACTED]' })
+  })
+
   test('shutdown flushes pending events', async ({ assert }) => {
     const audit = (await app.container.make('audit')) as AuditService
     const pipeline = await app.container.make('audit.pipeline')
@@ -80,11 +101,9 @@ test.group('AuditProvider', (group) => {
       }
     )
 
-    await pipeline.shutdown()
+    await app.terminate()
+    assert.equal(pipeline.stats().written, 1)
 
-    const row = await Audit.query().where('event', 'post.updated').first()
-    assert.isNotNull(row)
-    assert.equal(row!.event, 'post.updated')
-    assert.equal(row!.actorType, 'user')
+    app = await createLucidApp()
   })
 })

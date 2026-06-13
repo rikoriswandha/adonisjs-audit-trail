@@ -11,7 +11,7 @@ import type {
   VerifyReport,
 } from '../types.js'
 import type { LucidStoreOptions } from '../define_config.js'
-import { chainBatch, verifyChain } from '../core/hash_chain.js'
+import { chainBatch, GENESIS, hashEntry } from '../core/hash_chain.js'
 import { AuditStoreError } from '../core/errors.js'
 
 interface Row {
@@ -158,23 +158,80 @@ export default class LucidStore implements AuditStoreContract {
     range?: { fromSeq?: number; toSeq?: number }
   ): AsyncGenerator<VerifyReport> {
     const db = await this.#db()
-    let query = db.query().from(this.#table).where('stream', stream).orderBy('seq', 'asc')
+    const pageSize = 500
+    const fromSeq = range?.fromSeq ?? 1
+    let lastSeq = fromSeq - 1
+    let prevSeq = 0
+    let prevHash = GENESIS
+    let checked = 0
+    let firstInvalidSeq: number | undefined
 
-    if (range?.fromSeq !== undefined) {
-      query = query.andWhere('seq', '>=', range.fromSeq)
-    }
-    if (range?.toSeq !== undefined) {
-      query = query.andWhere('seq', '<=', range.toSeq)
+    if (fromSeq > 1) {
+      const headRows = (await db
+        .query()
+        .select('seq', 'hash')
+        .from(this.#table)
+        .where('stream', stream)
+        .andWhere('seq', '<', fromSeq)
+        .orderBy('seq', 'desc')
+        .limit(1)) as Row[]
+
+      const head = headRows[0]
+      if (head) {
+        prevSeq = head.seq
+        prevHash = head.hash
+      }
     }
 
-    const rows = (await query) as Row[]
-    yield* verifyChain(
-      (async function* () {
-        for (const row of rows) {
-          yield rowToChainedEvent(row)
+    while (true) {
+      let query = db
+        .query()
+        .from(this.#table)
+        .where('stream', stream)
+        .andWhere('seq', '>', lastSeq)
+        .orderBy('seq', 'asc')
+        .limit(pageSize)
+
+      if (range?.toSeq !== undefined) {
+        query = query.andWhere('seq', '<=', range.toSeq)
+      }
+
+      const rows = (await query) as Row[]
+      if (rows.length === 0) return
+
+      for (const row of rows) {
+        const event = rowToChainedEvent(row)
+        checked++
+        lastSeq = event.seq
+
+        const expectedSeq = prevSeq + 1
+        const expectedHash = hashEntry({ ...event, seq: expectedSeq, prevHash })
+        const valid = event.seq === expectedSeq && event.hash === expectedHash
+
+        if (valid) {
+          prevSeq = event.seq
+          prevHash = event.hash
+          yield {
+            stream,
+            valid: true,
+            checkedCount: checked,
+          }
+          continue
         }
-      })()
-    )
+
+        firstInvalidSeq ??= event.seq
+        yield {
+          stream,
+          valid: false,
+          firstInvalidSeq,
+          expectedHash,
+          actualHash: event.hash,
+          checkedCount: checked,
+        }
+      }
+
+      if (rows.length < pageSize) return
+    }
   }
 
   async prune(policy: ResolvedRetentionPolicy): Promise<PruneReport> {
@@ -294,50 +351,54 @@ export default class LucidStore implements AuditStoreContract {
     return db.transaction(async (trx) => {
       await this.#acquireLock(trx, stream, dialect)
 
-      const headRows = (await trx
-        .query()
-        .select('seq', 'hash')
-        .from(this.#table)
-        .where('stream', stream)
-        .orderBy('seq', 'desc')
-        .limit(1)) as Row[]
+      try {
+        const headRows = (await trx
+          .query()
+          .select('seq', 'hash')
+          .from(this.#table)
+          .where('stream', stream)
+          .orderBy('seq', 'desc')
+          .limit(1)) as Row[]
 
-      const head = headRows[0] ? { seq: headRows[0].seq, hash: headRows[0].hash } : null
-      const chained = chainBatch(events, head)
+        const head = headRows[0] ? { seq: headRows[0].seq, hash: headRows[0].hash } : null
+        const chained = chainBatch(events, head)
 
-      const rows = chained.map((event) => ({
-        id: event.id,
-        stream: event.stream,
-        seq: event.seq,
-        hash: event.hash,
-        prev_hash: event.prevHash,
-        event: event.event,
-        auditable_type: event.auditableType,
-        auditable_id: event.auditableId,
-        old_values: event.oldValues === null ? null : JSON.stringify(event.oldValues),
-        new_values: event.newValues === null ? null : JSON.stringify(event.newValues),
-        metadata: event.metadata === null ? null : JSON.stringify(event.metadata),
-        actor_type: event.actor.type,
-        actor_id: event.actor.id,
-        actor_label: event.actor.label ?? null,
-        tenant_id: event.tenantId,
-        request_id: event.requestId,
-        correlation_id: event.correlationId,
-        ip_address: event.ipAddress,
-        user_agent: event.userAgent,
-        url: event.url,
-        http_method: event.httpMethod,
-        tags: JSON.stringify(event.tags),
-        schema_version: event.schemaVersion,
-        created_at: event.createdAt,
-      }))
+        const rows = chained.map((event) => ({
+          id: event.id,
+          stream: event.stream,
+          seq: event.seq,
+          hash: event.hash,
+          prev_hash: event.prevHash,
+          event: event.event,
+          auditable_type: event.auditableType,
+          auditable_id: event.auditableId,
+          old_values: event.oldValues === null ? null : JSON.stringify(event.oldValues),
+          new_values: event.newValues === null ? null : JSON.stringify(event.newValues),
+          metadata: event.metadata === null ? null : JSON.stringify(event.metadata),
+          actor_type: event.actor.type,
+          actor_id: event.actor.id,
+          actor_label: event.actor.label ?? null,
+          tenant_id: event.tenantId,
+          request_id: event.requestId,
+          correlation_id: event.correlationId,
+          ip_address: event.ipAddress,
+          user_agent: event.userAgent,
+          url: event.url,
+          http_method: event.httpMethod,
+          tags: JSON.stringify(event.tags),
+          schema_version: event.schemaVersion,
+          created_at: event.createdAt,
+        }))
 
-      await trx
-        .insertQuery()
-        .table(this.#table)
-        .multiInsert(rows as Record<string, unknown>[])
+        await trx
+          .insertQuery()
+          .table(this.#table)
+          .multiInsert(rows as Record<string, unknown>[])
 
-      return chained
+        return chained
+      } finally {
+        await this.#releaseLock(trx, stream, dialect)
+      }
     })
   }
 
@@ -357,5 +418,15 @@ export default class LucidStore implements AuditStoreContract {
     }
 
     // SQLite: single writer, no advisory lock needed
+  }
+
+  async #releaseLock(
+    db: QueryClientContract | TransactionClientContract,
+    stream: string,
+    dialect: string
+  ): Promise<void> {
+    if (dialect === 'mysql2' || dialect === 'mysql') {
+      await db.rawQuery('SELECT RELEASE_LOCK(?)', [stream])
+    }
   }
 }

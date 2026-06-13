@@ -1,4 +1,10 @@
 import { BaseModel, column, scope } from '@adonisjs/lucid/orm'
+import type { QueryClientContract } from '@adonisjs/lucid/types/database'
+import type {
+  LucidModel,
+  ModelAdapterOptions,
+  ModelQueryBuilderContract,
+} from '@adonisjs/lucid/types/model'
 import type { DateTime } from 'luxon'
 import { AuditImmutableError } from '../core/errors.js'
 
@@ -124,6 +130,64 @@ export default class Audit extends BaseModel {
     if (typeof value === 'string') return value
     if (value instanceof Date) return value.toISOString()
     return value.toISO() as string
+  }
+
+  static query<Model extends LucidModel, Result = InstanceType<Model>>(
+    this: Model,
+    options?: ModelAdapterOptions
+  ): ModelQueryBuilderContract<Model, Result> {
+    const query = super.query(options) as ModelQueryBuilderContract<Model, Result>
+    let proxy: ModelQueryBuilderContract<Model, Result>
+
+    const handler: ProxyHandler<ModelQueryBuilderContract<Model, Result>> = {
+      get(target, property, receiver) {
+        if (property === 'update' || property === 'del' || property === 'delete') {
+          return () => {
+            throw new AuditImmutableError()
+          }
+        }
+
+        const value = Reflect.get(target, property, receiver) as unknown
+        if (typeof value !== 'function') {
+          return value
+        }
+
+        return (...args: unknown[]) => {
+          const result = Reflect.apply(value, target, args) as unknown
+          return result === target ? proxy : result
+        }
+      },
+    }
+
+    proxy = new Proxy(query, handler)
+    return proxy
+  }
+
+  static async truncate(): Promise<void> {
+    throw new AuditImmutableError()
+  }
+
+  $getQueryFor(
+    action: 'insert',
+    client: QueryClientContract
+  ): ReturnType<QueryClientContract['insertQuery']>
+  $getQueryFor(
+    action: 'update' | 'delete' | 'refresh',
+    client: QueryClientContract
+  ): ModelQueryBuilderContract<LucidModel>
+  $getQueryFor(
+    action: 'insert' | 'update' | 'delete' | 'refresh',
+    client: QueryClientContract
+  ): ReturnType<QueryClientContract['insertQuery']> | ModelQueryBuilderContract<LucidModel> {
+    if (action === 'update' || action === 'delete') {
+      throw new AuditImmutableError()
+    }
+
+    if (action === 'insert') {
+      return super.$getQueryFor(action, client)
+    }
+
+    return super.$getQueryFor(action, client)
   }
 
   async save(): Promise<this> {
