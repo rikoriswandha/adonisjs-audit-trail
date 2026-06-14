@@ -46,6 +46,10 @@ stores.http({
 
 The store signs each batch with HMAC-SHA256. If the collector returns the new chain head, it is used for the next batch; otherwise local chaining is used.
 
+#### In-memory verification window
+
+`maxRetainedPerStream` bounds how many of the most recent chained events the HTTP store keeps in memory per stream for `verify()` and `prune()`. It defaults to `100_000`; set it to `0` to retain every event in memory, matching the legacy unbounded behavior. When a cap is configured, `verify()` and `prune()` cover only the retained window.
+
 ### `fanout`
 
 Writes to a primary store and mirrors to one or more secondary stores.

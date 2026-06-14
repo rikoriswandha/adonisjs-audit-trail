@@ -7,7 +7,7 @@ import type {
   ResolvedRetentionPolicy,
   VerifyReport,
 } from '../types.js'
-import { chainBatch, GENESIS, verifyChain } from '../core/hash_chain.js'
+import { chainBatch, GENESIS, hashEntry } from '../core/hash_chain.js'
 import { canonicalJson } from '../core/canonical_json.js'
 import { parseDuration } from '../core/retention.js'
 import { AuditStoreError } from '../core/errors.js'
@@ -20,6 +20,12 @@ export interface HttpStoreOptions {
     header?: string
     algorithm?: 'sha256'
   }
+  /**
+   * Upper bound on how many of the most recent chained events to retain per stream
+   * in memory for `verify()`/`prune()`. Older retained events are evicted once the cap
+   * is exceeded. Set to `0` for unbounded (legacy behavior). Defaults to 100_000.
+   */
+  maxRetainedPerStream?: number
   idempotencyHeader?: string
 }
 
@@ -33,6 +39,7 @@ export default class HttpStore implements AuditStoreContract {
   readonly #headers: Record<string, string>
   readonly #signature?: HttpStoreOptions['signature']
   readonly #idempotencyHeader: string
+  readonly #maxRetainedPerStream: number
   readonly #heads: Map<string, HeadState>
   readonly #logs: Map<string, ChainedAuditEvent[]>
 
@@ -45,6 +52,7 @@ export default class HttpStore implements AuditStoreContract {
     this.#headers = options.headers ?? {}
     this.#signature = options.signature
     this.#idempotencyHeader = options.idempotencyHeader ?? 'X-Idempotency-Key'
+    this.#maxRetainedPerStream = options.maxRetainedPerStream ?? 100_000
     this.#heads = new Map()
     this.#logs = new Map()
   }
@@ -71,6 +79,9 @@ export default class HttpStore implements AuditStoreContract {
     for (const event of allChained) {
       const existing = this.#logs.get(event.stream) ?? []
       existing.push(event)
+      if (this.#maxRetainedPerStream > 0 && existing.length > this.#maxRetainedPerStream) {
+        existing.splice(0, existing.length - this.#maxRetainedPerStream)
+      }
       this.#logs.set(event.stream, existing)
     }
 
@@ -90,20 +101,58 @@ export default class HttpStore implements AuditStoreContract {
     range?: { fromSeq?: number; toSeq?: number }
   ): AsyncGenerator<VerifyReport> {
     const rows = this.#logs.get(stream) ?? []
-    const filtered = rows.filter((row) => {
-      if (range?.fromSeq !== undefined && row.seq < range.fromSeq) return false
-      if (range?.toSeq !== undefined && row.seq > range.toSeq) return false
-      return true
-    })
+    const filtered: ChainedAuditEvent[] = []
+    let previous: ChainedAuditEvent | undefined
 
-    let report: VerifyReport | undefined
-    for await (const r of verifyChain(toAsyncIterable(filtered))) {
-      report = r
-      yield r
+    for (const row of rows) {
+      const inRange =
+        (range?.fromSeq === undefined || row.seq >= range.fromSeq) &&
+        (range?.toSeq === undefined || row.seq <= range.toSeq)
+
+      if (inRange) {
+        filtered.push(row)
+      } else if (filtered.length === 0) {
+        previous = row
+      }
     }
 
-    if (!report) {
+    if (filtered.length === 0) {
       yield { stream, valid: true, checkedCount: 0 }
+      return
+    }
+
+    let prevSeq = previous?.seq ?? filtered[0]!.seq - 1
+    let prevHash = previous?.hash ?? filtered[0]!.prevHash
+    let checked = 0
+    let firstInvalidSeq: number | undefined
+
+    for (const event of filtered) {
+      checked++
+
+      const expectedSeq = prevSeq + 1
+      const expectedHash = hashEntry({ ...event, seq: expectedSeq, prevHash })
+      const valid = event.seq === expectedSeq && event.hash === expectedHash
+
+      if (valid) {
+        prevSeq = event.seq
+        prevHash = event.hash
+        yield {
+          stream,
+          valid: true,
+          checkedCount: checked,
+        }
+        continue
+      }
+
+      firstInvalidSeq ??= event.seq
+      yield {
+        stream,
+        valid: false,
+        firstInvalidSeq,
+        expectedHash,
+        actualHash: event.hash,
+        checkedCount: checked,
+      }
     }
   }
 
@@ -214,12 +263,6 @@ export default class HttpStore implements AuditStoreContract {
 
   #sign(payload: string, secret: string): string {
     return createHmac('sha256', secret).update(payload).digest('hex')
-  }
-}
-
-async function* toAsyncIterable<T>(items: T[]): AsyncGenerator<T> {
-  for (const item of items) {
-    yield item
   }
 }
 
