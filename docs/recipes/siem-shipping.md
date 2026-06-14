@@ -21,7 +21,7 @@ Forward container stdout to your log shipper (Fluent Bit, Vector, Datadog Agent,
 ## NDJSON to file
 
 ```ts
-stores.siem: stores.stream({
+siem: stores.stream({
   destination: 'storage/logs/audits.ndjson',
   format: 'ndjson',
 })
@@ -49,7 +49,7 @@ export default defineConfig({
 For collectors that accept batches:
 
 ```ts
-stores.siem: stores.http({
+siem: stores.http({
   url: process.env.AUDIT_SIEM_URL!,
   secret: process.env.AUDIT_SIEM_SECRET!,
 })

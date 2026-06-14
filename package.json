@@ -52,12 +52,25 @@
   },
   "keywords": [
     "adonisjs",
+    "adonisjs-v7",
     "audit",
     "audit-trail",
+    "audit-log",
     "lucid",
+    "lucid-orm",
     "compliance",
-    "tamper-evident"
+    "tamper-evident",
+    "security",
+    "gdpr",
+    "hipaa",
+    "soc2",
+    "sha256",
+    "hash-chain",
+    "siem",
+    "outbox",
+    "typescript"
   ],
+  "sideEffects": false,
   "author": "Rikology",
   "license": "MIT",
   "devDependencies": {

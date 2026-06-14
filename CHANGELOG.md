@@ -1,6 +1,8 @@
 # Changelog
 
-All notable changes to this project will be documented in this file. The format is based on [Conventional Commits](https://www.conventionalcommits.org/) and this project adheres to [Semantic Versioning](https://semver.org/).
+All notable changes to this project will be documented in this file.
+
+This project adheres to [Semantic Versioning](https://semver.org/) and uses [Conventional Commits](https://www.conventionalcommits.org/) for changelog generation. Releases are managed with `release-it`; contributors do not need to edit this file manually.
 
 ## Unreleased
 

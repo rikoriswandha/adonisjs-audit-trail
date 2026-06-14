@@ -1,18 +1,34 @@
 # `@rikology/adonisjs-audit-trail`
 
-Production-grade, tamper-evident audit trail for [AdonisJS v7](https://adonisjs.com).
-
 [![checks](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml/badge.svg)](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml)
 [![npm version](https://img.shields.io/npm/v/@rikology/adonisjs-audit-trail)](https://www.npmjs.com/package/@rikology/adonisjs-audit-trail)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 
-- **Automatic** model auditing via a Lucid mixin.
-- **Explicit** domain events via a fluent API.
-- **Tamper-evident** SHA-256 hash chains with `node ace audit:verify`.
-- **Asynchronous, batched write pipeline** that never blocks the request path.
-- **Pluggable stores**: SQL (Lucid), NDJSON stream, HTTP collector, or fanout.
-- **PII-aware** redaction, masking, hashing, and crypto-shredding support.
-- **Type-safe** end-to-end with generated event-name unions and v7 transformers.
+Production-grade, tamper-evident audit trail for [AdonisJS v7](https://adonisjs.com).
+
+Capture who changed what, when, and from where — automatically for Lucid models and explicitly for domain events — into an append-only, hash-chained trail you can cryptographically verify. Built for compliance workloads (SOC 2, GDPR, HIPAA-style) where the audit log itself must be trustworthy.
+
+## Why this package?
+
+Most AdonisJS auditing solutions stop at "who changed this row". `@rikology/adonisjs-audit-trail` is designed for environments where **the log is evidence**:
+
+- **Tamper-evident by default** — every record is linked into a per-stream SHA-256 hash chain; modification breaks every successor.
+- **Never blocks the request path** — asynchronous, batched pipeline with configurable delivery guarantees.
+- **Pluggable storage** — SQL, NDJSON stream, HTTP collector, or fanout.
+- **Compliance-aware** — field-level redaction, retention policies, GDPR crypto-shredding, multi-tenancy.
+- **Native v7 integration** — provider, configure flow, middleware, transformer stub, and Ace commands.
+
+## Table of contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [Features](#features)
+- [Documentation](#documentation)
+- [Demo app](#demo-app)
+- [Benchmarks](#benchmarks)
+- [Contributing](#contributing)
+- [Security](#security)
+- [License](#license)
 
 ## Requirements
 
@@ -28,7 +44,15 @@ Production-grade, tamper-evident audit trail for [AdonisJS v7](https://adonisjs.
 node ace add @rikology/adonisjs-audit-trail
 ```
 
-The configure command will publish `config/audit.ts`, migrations, the audit transformer, and register the provider, commands, and middleware.
+Or with your package manager of choice:
+
+```bash
+npm install @rikology/adonisjs-audit-trail
+pnpm add @rikology/adonisjs-audit-trail
+yarn add @rikology/adonisjs-audit-trail
+```
+
+The `configure` command publishes `config/audit.ts`, migrations, the audit transformer, and registers the provider, commands, and middleware.
 
 ### 2. Run migrations
 
@@ -79,21 +103,33 @@ node ace audit:verify
 
 Exit code is non-zero when a chain break is detected, so it can be wired into CI/cron.
 
+## Features
+
+- **Automatic** model auditing via a Lucid mixin.
+- **Explicit** domain events via a fluent API.
+- **Tamper-evident** SHA-256 hash chains with `node ace audit:verify`.
+- **Asynchronous, batched write pipeline** that never blocks the request path.
+- **Three delivery guarantees**: `best-effort`, `request-coupled`, and `transactional-outbox`.
+- **Pluggable stores**: SQL (Lucid), NDJSON stream, HTTP collector, or fanout.
+- **PII-aware** redaction, masking, hashing, and crypto-shredding support.
+- **Multi-tenancy** with tenant-scoped chains and queries.
+- **Type-safe** end-to-end with generated event-name unions and v7 transformers.
+
 ## Documentation
 
-- [Configuration reference](./docs/configuration.md)
-- [Guarantee modes](./docs/guarantee-modes.md)
-- [Tamper evidence & verification](./docs/tamper-evidence.md)
-- [Redaction & GDPR](./docs/redaction-gdpr.md)
-- [Retention & pruning](./docs/retention.md)
-- [Multi-tenancy](./docs/multi-tenancy.md)
-- [Stores](./docs/stores.md)
-- [Operations guide](./docs/operations.md)
+- [Configuration reference](./docs/configuration.md) — every config option, env variable, and typed event names.
+- [Guarantee modes](./docs/guarantee-modes.md) — choosing between best-effort, request-coupled, and transactional-outbox.
+- [Tamper evidence & verification](./docs/tamper-evidence.md) — how the hash chain works and what to do if verification fails.
+- [Redaction & GDPR](./docs/redaction-gdpr.md) — masking, hashing, and crypto-shredding sensitive fields.
+- [Retention & pruning](./docs/retention.md) — archive and prune old events safely.
+- [Multi-tenancy](./docs/multi-tenancy.md) — tenant-scoped streams and queries.
+- [Stores](./docs/stores.md) — built-in storage drivers and custom store authoring.
+- [Operations guide](./docs/operations.md) — partitioning, role grants, DLQ monitoring, and cron verification.
 - [Recipes: Inertia audit viewer](./docs/recipes/inertia-viewer.md)
 - [Recipes: SIEM shipping](./docs/recipes/siem-shipping.md)
 - [Threat model](./docs/threat-model.md)
 - [Upgrade policy](./docs/upgrade-policy.md)
-
+- [Architecture](./docs/ARCHITECTURE.md) — design rationale and prior-art analysis.
 
 ## Demo app
 
@@ -108,11 +144,19 @@ npm run bench
 BENCH_DB=postgres npm run bench
 ```
 
-| Metric                                 | Target           | Observed (SQLite, MBP M1 Pro)         |
-| -------------------------------------- | ---------------- | ------------------------------------- |
-| Enqueue overhead per `model.save()`    | < 0.2 ms p99     | ~0.075 ms p99                         |
+| Metric                                 | Target            | Observed (SQLite, MBP M1 Pro)         |
+| -------------------------------------- | ----------------- | ------------------------------------- |
+| Enqueue overhead per `model.save()`    | < 0.2 ms p99      | ~0.075 ms p99                         |
 | Flush throughput (Postgres, batch 200) | >= 5,000 events/s | run `BENCH_DB=postgres npm run bench` |
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the development workflow, and conventions. Please also read the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+## Security
+
+If you discover a security vulnerability, please **do not open a public issue**. Follow the disclosure process in [SECURITY.md](./SECURITY.md).
 
 ## License
 
-[MIT](./LICENSE.md)
+[MIT](./LICENSE.md) © Rikology
