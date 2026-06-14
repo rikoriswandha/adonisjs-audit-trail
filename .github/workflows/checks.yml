@@ -44,7 +44,7 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - name: Install
         run: npm install
-      - name: Run unit tests (SQLite only)
+      - name: Run unit tests with coverage gate (SQLite only)
         run: SKIP_DOCKER_TESTS=1 npm test
 
   test-integration:

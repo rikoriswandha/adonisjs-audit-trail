@@ -171,8 +171,20 @@
       "html"
     ],
     "exclude": [
-      "tests/**"
-    ]
+      "tests/**",
+      "benchmarks/**",
+      "bin/**",
+      "build/**",
+      "coverage/**",
+      "examples/**",
+      "eslint.config.js"
+    ],
+    "all": true,
+    "check-coverage": true,
+    "lines": 80,
+    "functions": 81,
+    "branches": 74,
+    "statements": 80
   },
   "prettier": "@adonisjs/prettier-config"
 }
