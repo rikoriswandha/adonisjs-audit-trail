@@ -1,6 +1,6 @@
 # `@rikology/adonisjs-audit-trail`
 
-[![checks](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml/badge.svg)](https://github.com/rikology/adonisjs-audit-trail/actions/workflows/checks.yml)
+[![checks](https://github.com/rikoriswandha/adonisjs-audit-trail/actions/workflows/checks.yml/badge.svg)](https://github.com/rikoriswandha/adonisjs-audit-trail/actions/workflows/checks.yml)
 [![npm version](https://img.shields.io/npm/v/@rikology/adonisjs-audit-trail)](https://www.npmjs.com/package/@rikology/adonisjs-audit-trail)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE.md)
 

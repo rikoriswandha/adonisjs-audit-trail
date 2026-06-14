@@ -22,7 +22,7 @@ This project ships a [Code of Conduct](./CODE_OF_CONDUCT.md). By participating y
 ## Getting started
 
 ```bash
-git clone https://github.com/rikology/adonisjs-audit-trail.git
+git clone https://github.com/rikoriswandha/adonisjs-audit-trail.git
 cd adonisjs-audit-trail
 npm install
 ```
