@@ -65,7 +65,8 @@ function runConcurrencyTests(): void {
       if (container === null) {
         throw new Error('Postgres container is required for concurrency proof')
       }
-      const [app1, app2] = await Promise.all([createApp(container), createApp(container)])
+      const app1 = await createApp(container)
+      const app2 = await createApp(container)
 
       try {
         const store1 = useStore(await app1.container.make('audit.manager'))
@@ -78,9 +79,10 @@ function runConcurrencyTests(): void {
         const batches2: Promise<unknown>[] = []
 
         for (let i = 0; i < perApp / batchSize; i++) {
-          const batch = Array.from({ length: batchSize }, () => makeEvent())
-          batches1.push(store1.write(batch))
-          batches2.push(store2.write(batch))
+          const batch1 = Array.from({ length: batchSize }, () => makeEvent())
+          const batch2 = Array.from({ length: batchSize }, () => makeEvent())
+          batches1.push(store1.write(batch1))
+          batches2.push(store2.write(batch2))
         }
 
         await Promise.all([...batches1, ...batches2])
@@ -115,7 +117,8 @@ function runConcurrencyTests(): void {
       if (container === null) {
         throw new Error('Postgres container is required for concurrency proof')
       }
-      const [app1, app2] = await Promise.all([createApp(container), createApp(container)])
+      const app1 = await createApp(container)
+      const app2 = await createApp(container)
       try {
         const store1 = useStore(await app1.container.make('audit.manager'))
         const store2 = useStore(await app2.container.make('audit.manager'))

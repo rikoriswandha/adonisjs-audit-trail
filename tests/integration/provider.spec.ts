@@ -167,7 +167,7 @@ withDatabases('AuditProvider', (group, dialect) => {
       .insert({
         payload: JSON.stringify(makeOutboxEvent()),
         attempts: 0,
-        created_at: new Date().toISOString(),
+        created_at: new Date(),
       })
 
     const drainer = await app.container.make('audit.outbox_drainer')

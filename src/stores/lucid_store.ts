@@ -15,14 +15,14 @@ import { parseDuration } from '../core/retention.js'
 
 interface Row {
   id: string
-  seq: number
+  seq: number | string
   stream: string
   event: string
   auditable_type: string | null
   auditable_id: string | null
-  old_values: string | null
-  new_values: string | null
-  metadata: string | null
+  old_values: unknown
+  new_values: unknown
+  metadata: unknown
   actor_type: string
   actor_id: string | null
   actor_label: string | null
@@ -33,27 +33,46 @@ interface Row {
   user_agent: string | null
   url: string | null
   http_method: string | null
-  tags: string | null
+  tags: unknown
   schema_version: string
   hash: string
   prev_hash: string
-  created_at: string
+  created_at: unknown
 }
 
-function parseJson(value: string | null): Record<string, unknown> | null {
+function parseJson(value: unknown): Record<string, unknown> | null {
   if (value === null) return null
-  return JSON.parse(value) as Record<string, unknown>
+  if (typeof value === 'string') return JSON.parse(value) as Record<string, unknown>
+  return value as Record<string, unknown>
 }
 
-function parseTags(value: string | null): string[] {
+function parseTags(value: unknown): string[] {
   if (value === null) return []
-  return JSON.parse(value) as string[]
+  if (typeof value === 'string') return JSON.parse(value) as string[]
+  return value as string[]
+}
+
+function isSqlite(dialect: string): boolean {
+  return dialect === 'sqlite' || dialect === 'sqlite3' || dialect === 'better-sqlite3'
+}
+
+function toDbTimestamp(value: string, dialect: string): string | Date {
+  return isSqlite(dialect) ? value : new Date(value)
+}
+
+function toIsoString(value: unknown): string {
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'string') {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? value : date.toISOString()
+  }
+  return String(value)
 }
 
 function rowToChainedEvent(row: Row): ChainedAuditEvent {
   return {
     id: row.id,
-    seq: row.seq,
+    seq: Number(row.seq),
     stream: row.stream,
     event: row.event,
     auditableType: row.auditable_type,
@@ -75,7 +94,7 @@ function rowToChainedEvent(row: Row): ChainedAuditEvent {
     httpMethod: row.http_method,
     tags: parseTags(row.tags),
     schemaVersion: row.schema_version as '1',
-    createdAt: row.created_at,
+    createdAt: toIsoString(row.created_at),
     hash: row.hash,
     prevHash: row.prev_hash,
   }
@@ -120,15 +139,14 @@ export default class LucidStore implements AuditStoreContract {
 
   async head(stream: string): Promise<{ seq: number; hash: string } | null> {
     const db = await this.#db()
-    const query = db
+    const rows = (await db
       .query()
       .from(this.#table)
       .where('stream', stream)
       .orderBy('seq', 'desc')
-      .limit(1)
-    const rows = (await query) as Row[]
+      .limit(1)) as Row[]
     const row = rows[0]
-    return row ? { seq: row.seq, hash: row.hash } : null
+    return row ? { seq: Number(row.seq), hash: row.hash } : null
   }
 
   async *verify(
@@ -156,7 +174,7 @@ export default class LucidStore implements AuditStoreContract {
 
       const head = headRows[0]
       if (head) {
-        prevSeq = head.seq
+        prevSeq = Number(head.seq)
         prevHash = head.hash
       }
     }
@@ -214,6 +232,7 @@ export default class LucidStore implements AuditStoreContract {
 
   async prune(policy: ResolvedRetentionPolicy): Promise<PruneReport> {
     const db = await this.#db()
+    const dialect = db.dialect.name
     const now = Date.now()
     let totalPruned = 0
     const perEvent: Record<string, number> = {}
@@ -247,9 +266,9 @@ export default class LucidStore implements AuditStoreContract {
           .from(this.#table)
           .where('stream', stream)
           .orderBy('seq', 'desc')
-          .limit(1)) as { seq: number }[]
+          .limit(1)) as { seq: number | string }[]
 
-        const headSeq = headRows[0]?.seq
+        const headSeq = headRows[0] ? Number(headRows[0].seq) : undefined
 
         let candidateQuery = db
           .query()
@@ -257,7 +276,7 @@ export default class LucidStore implements AuditStoreContract {
           .from(this.#table)
           .where('stream', stream)
           .andWhere('event', event)
-          .andWhere('created_at', '<', cutoff)
+          .andWhere('created_at', '<', toDbTimestamp(cutoff, dialect))
 
         if (headSeq !== undefined) {
           candidateQuery = candidateQuery.andWhere('seq', '<', headSeq)
@@ -283,19 +302,18 @@ export default class LucidStore implements AuditStoreContract {
 
         if (policy.archive) {
           await policy.archive({
+            fromSeq: Number(candidates[0].seq),
+            toSeq: Number(candidates[count - 1].seq),
+            count,
+            fromCreatedAt: toIsoString(candidates[0].created_at),
+            toCreatedAt: toIsoString(candidates[count - 1].created_at),
             event,
             stream,
-            fromSeq: candidates[0].seq,
-            toSeq: candidates[count - 1].seq,
-            count,
-            fromCreatedAt: candidates[0].created_at,
-            toCreatedAt: candidates[count - 1].created_at,
           })
         }
 
         const ids = candidates.map((row) => row.id)
-        await db.query().from(this.#table).whereIn('id', ids).del()
-
+        await db.query().from(this.#table).whereIn('id', ids).delete()
         totalPruned += count
         perEvent[event] = (perEvent[event] ?? 0) + count
       }
@@ -310,6 +328,7 @@ export default class LucidStore implements AuditStoreContract {
 
   async query(filters: AuditQueryFilters): Promise<ChainedAuditEvent[]> {
     const db = await this.#db()
+    const dialect = db.dialect.name
     let query = db.query().from(this.#table)
 
     if (filters.stream) {
@@ -341,10 +360,10 @@ export default class LucidStore implements AuditStoreContract {
       query = query.where('seq', '<=', filters.toSeq)
     }
     if (filters.fromCreatedAt) {
-      query = query.where('created_at', '>=', filters.fromCreatedAt)
+      query = query.where('created_at', '>=', toDbTimestamp(filters.fromCreatedAt, dialect))
     }
     if (filters.toCreatedAt) {
-      query = query.where('created_at', '<=', filters.toCreatedAt)
+      query = query.where('created_at', '<=', toDbTimestamp(filters.toCreatedAt, dialect))
     }
 
     const limit = filters.limit ?? 100
@@ -375,7 +394,7 @@ export default class LucidStore implements AuditStoreContract {
           .orderBy('seq', 'desc')
           .limit(1)) as Row[]
 
-        const head = headRows[0] ? { seq: headRows[0].seq, hash: headRows[0].hash } : null
+        const head = headRows[0] ? { seq: Number(headRows[0].seq), hash: headRows[0].hash } : null
         const chained = chainBatch(events, head)
 
         const rows = chained.map((event) => ({
@@ -402,7 +421,7 @@ export default class LucidStore implements AuditStoreContract {
           http_method: event.httpMethod,
           tags: JSON.stringify(event.tags),
           schema_version: event.schemaVersion,
-          created_at: event.createdAt,
+          created_at: toDbTimestamp(event.createdAt, dialect),
         }))
 
         await trx

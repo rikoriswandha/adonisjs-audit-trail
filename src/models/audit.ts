@@ -1,4 +1,5 @@
 import { BaseModel, column, scope } from '@adonisjs/lucid/orm'
+
 import type { QueryClientContract } from '@adonisjs/lucid/types/database'
 import type {
   LucidModel,
@@ -8,13 +9,26 @@ import type {
 import type { DateTime } from 'luxon'
 import { AuditImmutableError } from '../core/errors.js'
 
+function consumeJsonObject(value: unknown): Record<string, unknown> | null {
+  if (value === null) return null
+  if (typeof value === 'string') return JSON.parse(value) as Record<string, unknown>
+  return value as Record<string, unknown>
+}
+
+function consumeJsonArray(value: unknown): string[] {
+  if (value === null) return []
+  if (typeof value === 'string') return JSON.parse(value) as string[]
+  return value as string[]
+}
+
 export default class Audit extends BaseModel {
   static table = 'audits'
 
   @column({ isPrimary: true })
   declare id: string
-
-  @column()
+  @column({
+    consume: (value: string | number) => Number(value),
+  })
   declare seq: number
 
   @column()
@@ -31,19 +45,19 @@ export default class Audit extends BaseModel {
 
   @column({
     prepare: (value: unknown) => JSON.stringify(value),
-    consume: (value: string | null) => (value === null ? null : JSON.parse(value)),
+    consume: consumeJsonObject,
   })
   declare oldValues: Record<string, unknown> | null
 
   @column({
     prepare: (value: unknown) => JSON.stringify(value),
-    consume: (value: string | null) => (value === null ? null : JSON.parse(value)),
+    consume: consumeJsonObject,
   })
   declare newValues: Record<string, unknown> | null
 
   @column({
     prepare: (value: unknown) => JSON.stringify(value),
-    consume: (value: string | null) => (value === null ? null : JSON.parse(value)),
+    consume: consumeJsonObject,
   })
   declare metadata: Record<string, unknown> | null
 
@@ -79,7 +93,7 @@ export default class Audit extends BaseModel {
 
   @column({
     prepare: (value: unknown) => JSON.stringify(value),
-    consume: (value: string | null) => (value === null ? [] : JSON.parse(value)),
+    consume: consumeJsonArray,
   })
   declare tags: string[]
 
@@ -128,10 +142,10 @@ export default class Audit extends BaseModel {
     return query.where('event', name)
   })
 
-  static #toIso(value: Date | string | DateTime): string {
-    if (typeof value === 'string') return value
-    if (value instanceof Date) return value.toISOString()
-    return value.toISO() as string
+  static #toIso(value: Date | string | DateTime): string | Date {
+    if (typeof value === 'string') return new Date(value)
+    if (value instanceof Date) return value
+    return value.toJSDate()
   }
 
   static query<Model extends LucidModel, Result = InstanceType<Model>>(

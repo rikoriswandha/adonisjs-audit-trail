@@ -37,7 +37,7 @@ export default class extends BaseSchema {
       table.jsonb('tags').notNullable()
 
       table.string('schema_version', 8).notNullable().defaultTo('1')
-      table.timestamp('created_at', { useTz: true }).notNullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
 
       table.unique(['stream', 'seq'])
       table.index(['auditable_type', 'auditable_id', 'seq'])

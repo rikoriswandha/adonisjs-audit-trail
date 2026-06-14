@@ -203,7 +203,7 @@ withDatabases('Audit commands', (group, dialect) => {
       .query()
       .from('audits')
       .where('event', 'old.event')
-      .update({ created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString() })
+      .update({ created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
 
     const command = await runCommand(app, AuditPrune)
 
@@ -241,7 +241,7 @@ withDatabases('Audit commands', (group, dialect) => {
           createdAt: new Date().toISOString(),
         }),
         attempts: 0,
-        created_at: new Date().toISOString(),
+        created_at: new Date(),
       })
 
     const command = await runCommand(app, AuditReplayOutbox)

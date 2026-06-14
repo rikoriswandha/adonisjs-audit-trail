@@ -91,7 +91,7 @@ export default class AuditOutboxDrainer {
     }
 
     const now = new Date()
-    const staleHorizon = new Date(now.getTime() - this.#staleClaimMs).toISOString()
+    const staleHorizon = new Date(now.getTime() - this.#staleClaimMs)
 
     const rows = (await db
       .query()
@@ -106,7 +106,7 @@ export default class AuditOutboxDrainer {
     let processed = 0
 
     for (const row of rows) {
-      const claimedAt = now.toISOString()
+      const claimedAt = new Date()
       const claimed = await this.#claim(db, row, claimedAt)
       if (!claimed) {
         continue
@@ -118,7 +118,7 @@ export default class AuditOutboxDrainer {
           await this.store.write(events)
         }
 
-        const processedAt = new Date().toISOString()
+        const processedAt = new Date()
         await db.query().from('audit_outbox').where('id', row.id).update({
           processed_at: processedAt,
           updated_at: processedAt,
@@ -128,7 +128,7 @@ export default class AuditOutboxDrainer {
         const attempts = Number(row.attempts ?? 0) + 1
 
         if (attempts >= this.#maxAttempts) {
-          const failedAt = new Date().toISOString()
+          const failedAt = new Date()
           await db.query().from('audit_outbox').where('id', row.id).update({
             processed_at: failedAt,
             updated_at: failedAt,
@@ -139,7 +139,7 @@ export default class AuditOutboxDrainer {
 
         await db.query().from('audit_outbox').where('id', row.id).update({
           claimed_at: null,
-          updated_at: new Date().toISOString(),
+          updated_at: new Date(),
         })
       }
     }
@@ -147,8 +147,8 @@ export default class AuditOutboxDrainer {
     return processed
   }
 
-  async #claim(db: QueryClientContract, row: OutboxRow, claimedAt: string): Promise<boolean> {
-    const staleHorizon = new Date(new Date(claimedAt).getTime() - this.#staleClaimMs).toISOString()
+  async #claim(db: QueryClientContract, row: OutboxRow, claimedAt: Date): Promise<boolean> {
+    const staleHorizon = new Date(claimedAt.getTime() - this.#staleClaimMs)
     const attempts = Number(row.attempts ?? 0) + 1
     const affected = await db
       .query()

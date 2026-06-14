@@ -173,7 +173,7 @@ async function redactForOutbox(event: AuditEvent): Promise<AuditEvent> {
 }
 
 async function writeOutbox(trx: TransactionClientContract, event: AuditEvent): Promise<void> {
-  const now = new Date().toISOString()
+  const now = new Date()
   await trx
     .insertQuery()
     .table('audit_outbox')

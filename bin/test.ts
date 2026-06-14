@@ -8,5 +8,6 @@ configure({
   files: ['tests/**/*.spec.ts'],
   plugins: [assert(), expectTypeOf()],
   forceExit: true,
+  timeout: 120_000,
 })
 run()

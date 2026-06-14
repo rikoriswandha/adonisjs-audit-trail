@@ -29,7 +29,7 @@ export async function runMigrations(app: ApplicationService): Promise<void> {
       table.string('http_method').nullable()
       table.json('tags').notNullable()
       table.string('schema_version').notNullable()
-      table.timestamp('created_at').notNullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
 
       table.unique(['stream', 'seq'])
       table.index(['event'])
@@ -45,10 +45,10 @@ export async function runMigrations(app: ApplicationService): Promise<void> {
       table.increments('id')
       table.json('payload').notNullable()
       table.integer('attempts').unsigned().notNullable().defaultTo(0)
-      table.timestamp('claimed_at').nullable()
-      table.timestamp('processed_at').nullable()
-      table.timestamp('created_at').notNullable()
-      table.timestamp('updated_at').nullable()
+      table.timestamp('claimed_at', { useTz: true, precision: 3 }).nullable()
+      table.timestamp('processed_at', { useTz: true, precision: 3 }).nullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.timestamp('updated_at', { useTz: true, precision: 3 }).nullable()
 
       table.index(['processed_at', 'claimed_at'])
     })
@@ -59,8 +59,8 @@ export async function runMigrations(app: ApplicationService): Promise<void> {
       table.increments('id')
       table.string('title').notNullable()
       table.text('body').nullable()
-      table.timestamp('created_at').notNullable()
-      table.timestamp('updated_at').nullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.timestamp('updated_at', { useTz: true, precision: 3 }).nullable()
     })
   }
 }

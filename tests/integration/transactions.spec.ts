@@ -130,8 +130,8 @@ withDatabases('Auditable transactions', (_group, dialect) => {
       await client.table('audit_outbox').insert({
         payload: JSON.stringify({ event: makeOutboxEvent() }),
         attempts: 0,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        created_at: new Date(),
+        updated_at: new Date(),
       })
 
       const { default: AuditOutboxDrainer } = await import('../../src/core/outbox_drainer.js')

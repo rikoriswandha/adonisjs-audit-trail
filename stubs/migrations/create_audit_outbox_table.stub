@@ -12,11 +12,10 @@ export default class extends BaseSchema {
     this.schema.createTable(this.tableName, (table) => {
       table.uuid('id').primary()
       table.jsonb('payload').notNullable()
-      table.integer('attempts').unsigned().notNullable().defaultTo(0)
-      table.timestamp('claimed_at', { useTz: true }).nullable()
-      table.timestamp('processed_at', { useTz: true }).nullable()
-      table.timestamp('created_at', { useTz: true }).notNullable()
-      table.timestamp('updated_at', { useTz: true }).nullable()
+      table.timestamp('claimed_at', { useTz: true, precision: 3 }).nullable()
+      table.timestamp('processed_at', { useTz: true, precision: 3 }).nullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.timestamp('updated_at', { useTz: true, precision: 3 }).nullable()
 
       table.index(['processed_at', 'claimed_at'])
       table.index(['created_at'])

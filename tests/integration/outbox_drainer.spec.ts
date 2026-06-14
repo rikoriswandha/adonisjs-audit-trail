@@ -95,7 +95,7 @@ withDatabases('Audit outbox drainer', (group, dialect) => {
     const { store, writes } = createRecordingStore()
     const poisonRows: Array<{ id: string | number; payload: unknown; attempts: number }> = []
     const maxAttempts = 3
-    const now = new Date().toISOString()
+    const now = new Date()
 
     await client.table('audit_outbox').insert({
       id: 1,
@@ -140,7 +140,7 @@ withDatabases('Audit outbox drainer', (group, dialect) => {
     const client = db.connection()
     const { store, writes } = createRecordingStore()
     const event = makeOutboxEvent()
-    const now = new Date().toISOString()
+    const now = new Date()
 
     await client.table('audit_outbox').insert({
       id: 1,
