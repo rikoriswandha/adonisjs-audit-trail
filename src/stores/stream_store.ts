@@ -1,4 +1,11 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import type { Writable } from 'node:stream'
 import type {
@@ -59,6 +66,8 @@ export default class StreamStore implements AuditStoreContract {
   readonly #format: 'ndjson' | 'json'
   readonly #heads: Map<string, HeadState>
   readonly #sidecarPath?: string
+  #fileStream?: import('node:fs').WriteStream
+  #fileStreamError?: Error
 
   constructor(options: StreamStoreOptions = {}) {
     this.#destination = resolveDestination(options.destination)
@@ -168,22 +177,26 @@ export default class StreamStore implements AuditStoreContract {
     }
 
     if (this.#destination.type === 'file') {
-      const dir = dirname(this.#destination.path)
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true })
+      const stream = this.#getFileStream(this.#destination.path)
+      if (this.#fileStreamError) {
+        const error = this.#fileStreamError
+        this.#fileStreamError = undefined
+        throw new AuditStoreError(`Stream store write failed: ${error.message}`)
       }
 
-      const stream = createWriteStream(this.#destination.path, { flags: 'a' })
       await new Promise<void>((res, rej) => {
         stream.write(payload, (error) => {
           if (error) {
             rej(new AuditStoreError(`Stream store write failed: ${error.message}`))
+          } else if (this.#fileStreamError) {
+            const streamError = this.#fileStreamError
+            this.#fileStreamError = undefined
+            rej(new AuditStoreError(`Stream store write failed: ${streamError.message}`))
           } else {
             res()
           }
         })
       })
-      stream.end()
       return
     }
 
@@ -194,6 +207,22 @@ export default class StreamStore implements AuditStoreContract {
         await new Promise<void>((res) => writable.once('drain', res))
       }
     }
+  }
+
+  #getFileStream(path: string): import('node:fs').WriteStream {
+    if (this.#fileStream) return this.#fileStream
+
+    const dir = dirname(path)
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true })
+    }
+
+    const stream = createWriteStream(path, { flags: 'a' })
+    stream.on('error', (error) => {
+      this.#fileStreamError = error
+    })
+    this.#fileStream = stream
+    return stream
   }
 
   #readFileEvents(
@@ -262,7 +291,9 @@ export default class StreamStore implements AuditStoreContract {
       data[stream] = head
     }
 
-    writeFileSync(this.#sidecarPath, JSON.stringify(data))
+    const tmpPath = `${this.#sidecarPath}.tmp`
+    writeFileSync(tmpPath, JSON.stringify(data))
+    renameSync(tmpPath, this.#sidecarPath)
   }
 }
 
