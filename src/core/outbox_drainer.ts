@@ -4,12 +4,15 @@ import type { AuditEvent, AuditStoreContract } from '../types.js'
 import { AuditOutboxPayloadError } from './errors.js'
 
 const DEFAULT_STALE_CLAIM_MS = 5 * 60 * 1000
+const DEFAULT_MAX_ATTEMPTS = 5
 
 interface OutboxRow {
   id: string | number
   payload: unknown
   attempts?: number | string | null
 }
+
+type PoisonHandler = (info: { id: string | number; payload: unknown; attempts: number }) => void
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -52,13 +55,19 @@ function normalizePayload(payload: unknown): AuditEvent[] {
 export default class AuditOutboxDrainer {
   #timer: ReturnType<typeof setInterval> | null = null
   #staleClaimMs: number
+  #maxAttempts: number
+  #onPoison: PoisonHandler
 
   constructor(
     protected app: ApplicationService,
     protected store: AuditStoreContract,
-    staleClaimMs: number = DEFAULT_STALE_CLAIM_MS
+    staleClaimMs: number = DEFAULT_STALE_CLAIM_MS,
+    maxAttempts: number = DEFAULT_MAX_ATTEMPTS,
+    onPoison: PoisonHandler = defaultPoisonHandler
   ) {
     this.#staleClaimMs = staleClaimMs
+    this.#maxAttempts = maxAttempts
+    this.#onPoison = onPoison
   }
 
   start(intervalMs = 1000): void {
@@ -116,6 +125,18 @@ export default class AuditOutboxDrainer {
         })
         processed++
       } catch {
+        const attempts = Number(row.attempts ?? 0) + 1
+
+        if (attempts >= this.#maxAttempts) {
+          const failedAt = new Date().toISOString()
+          await db.query().from('audit_outbox').where('id', row.id).update({
+            processed_at: failedAt,
+            updated_at: failedAt,
+          })
+          this.#onPoison({ id: row.id, payload: row.payload, attempts })
+          continue
+        }
+
         await db.query().from('audit_outbox').where('id', row.id).update({
           claimed_at: null,
           updated_at: new Date().toISOString(),
@@ -150,4 +171,11 @@ export default class AuditOutboxDrainer {
     const db = await this.app.container.make('lucid.db')
     return db.connection()
   }
+}
+
+function defaultPoisonHandler(info: { id: string | number; attempts: number }): void {
+  console.error(
+    `Audit outbox row ${info.id} failed ${info.attempts} times and was dead-lettered; ` +
+      `payload is irrecoverable and the row has been marked processed.`
+  )
 }
