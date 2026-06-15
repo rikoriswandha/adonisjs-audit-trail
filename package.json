@@ -39,7 +39,7 @@
     "copy:templates": "copyfiles \"stubs/**/*.stub\" build",
     "copy:commands": "copyfiles \"commands/commands.json\" build",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "lint": "eslint . --no-warn-ignored",
     "format": "prettier --write .",
     "quick:test": "node --import=@poppinss/ts-exec --enable-source-maps bin/test.ts",
     "test": "c8 npm run quick:test",
