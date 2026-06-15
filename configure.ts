@@ -18,19 +18,29 @@ import type Configure from '@adonisjs/core/commands/configure'
 const stubsRoot = fileURLToPath(new URL('./stubs/', import.meta.url))
 
 export async function configure(command: Configure) {
-  const outbox = await command.prompt.confirm(
-    'Enable transactional outbox mode? (requires audit_outbox table)',
-    { default: false }
-  )
+  const flags = command.parsedFlags
 
-  const multiTenant = await command.prompt.confirm('Is this a multi-tenant application?', {
-    default: false,
-  })
+  const outbox =
+    flags.outbox ??
+    (await command.prompt.confirm(
+      'Enable transactional outbox mode? (requires audit_outbox table)',
+      {
+        default: false,
+      }
+    ))
 
-  const immutability = await command.prompt.confirm(
-    'Enforce DB-level immutability triggers on the audits table?',
-    { default: true }
-  )
+  const multiTenant =
+    flags.multiTenant ??
+    flags['multi-tenant'] ??
+    (await command.prompt.confirm('Is this a multi-tenant application?', {
+      default: false,
+    }))
+
+  const immutability =
+    flags.immutability ??
+    (await command.prompt.confirm('Enforce DB-level immutability triggers on the audits table?', {
+      default: true,
+    }))
 
   const codemods = await command.createCodemods()
 

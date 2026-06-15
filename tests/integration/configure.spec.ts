@@ -32,6 +32,7 @@ test.group('Configure hook', () => {
     }
 
     const command = {
+      parsedFlags: {},
       prompt: {
         confirm: async (_message: string, options?: { default?: boolean }) =>
           options?.default ?? false,
@@ -99,6 +100,7 @@ test.group('Configure hook', () => {
     }
 
     const command = {
+      parsedFlags: {},
       prompt: {
         confirm: async () => true,
       },
@@ -114,5 +116,57 @@ test.group('Configure hook', () => {
 
     assert.include(stubs, 'migrations/create_audit_outbox_table.stub')
     assert.include(stubs, 'config/audit.stub')
+  })
+
+  test('uses CLI flags without prompting', async ({ assert }) => {
+    const calls: Record<string, unknown[]> = { makeUsingStub: [], updateRcFile: [] }
+    let prompted = false
+
+    const codemods = {
+      async makeUsingStub(root: string, path: string, data: Record<string, unknown>) {
+        calls.makeUsingStub.push({ root, path, data })
+        return { destination: path }
+      },
+      async updateRcFile(callback: (rc: any) => void) {
+        callback({
+          addProvider: () => {},
+          addCommand: () => {},
+        })
+      },
+      async registerMiddleware() {},
+      async defineEnvValidations() {},
+    }
+
+    const command = {
+      parsedFlags: { 'outbox': true, 'multi-tenant': false, 'immutability': false },
+      prompt: {
+        confirm: async () => {
+          prompted = true
+          return false
+        },
+      },
+      async createCodemods() {
+        return codemods as any
+      },
+      logger: {
+        success() {},
+      },
+    }
+
+    await configure(command as any)
+
+    assert.isFalse(prompted, 'no prompts when all flags provided')
+    assert.isTrue(
+      calls.makeUsingStub.some(
+        (c) => (c as any).path === 'migrations/create_audit_outbox_table.stub'
+      ),
+      'outbox migration published when --outbox flag is true'
+    )
+    const configCall = calls.makeUsingStub.find((c) => (c as any).path === 'config/audit.stub') as
+      | { data: Record<string, unknown> }
+      | undefined
+    assert.isDefined(configCall, 'config stub published')
+    assert.equal(configCall!.data.outbox, true, 'outbox flag flows to config stub')
+    assert.equal(configCall!.data.immutability, false, 'immutability flag flows to config stub')
   })
 })

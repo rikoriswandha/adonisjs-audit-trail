@@ -10,6 +10,13 @@ This project adheres to [Semantic Versioning](https://semver.org/) and uses [Con
 
 - Runnable AdonisJS demo app under `examples/demo`.
 
+### Fixed
+
+- `audit_outbox` migration stub was missing the `attempts` column that `writeOutbox()` and the drainer write to, causing every transactional-outbox insert to fail with a SQL error.
+- `audit_outbox` migration stub used `uuid('id')` but the mixin never populated it; rows shared `NULL` ids so the drainer's claim step matched every row at once and stalled the outbox. Stub now uses an auto-increment id to match the runtime contract.
+- `node ace configure` no longer hangs in non-interactive/CI environments; pass `--outbox`/`--no-outbox`, `--multi-tenant`/`--no-multi-tenant`, and `--immutability`/`--no-immutability` to skip the prompts.
+- ESLint config now explicitly ignores `examples/**` so building from source no longer depends on the root `tsconfig` exclude.
+
 ## 1.0.0
 
 ### Added

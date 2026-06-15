@@ -188,7 +188,7 @@ this.schema.createTable('audits', (table) => {
 
 ### 5.2 `audit_outbox` table (only for `transactional-outbox` mode)
 
-`id (uuid)`, `payload (jsonb)`, `created_at`, `claimed_at`, `attempts`. Rows are written inside the *same DB transaction* as the business change, then drained by the pipeline and moved into `audits` (where chaining happens). Survives process crashes.
+`id (auto-increment)`, `payload (jsonb)`, `attempts`, `claimed_at`, `processed_at`, `created_at`, `updated_at`. Rows are written inside the *same DB transaction* as the business change, then drained by the pipeline and moved into `audits` (where chaining happens). Survives process crashes.
 
 ### 5.3 Canonical serialization (chain input)
 

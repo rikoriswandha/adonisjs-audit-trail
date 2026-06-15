@@ -1,6 +1,7 @@
 import { configPkg } from '@adonisjs/eslint-config'
 
 export default configPkg(
+  { ignores: ['examples/**'] },
   {
     files: ['**/*.ts'],
     languageOptions: {

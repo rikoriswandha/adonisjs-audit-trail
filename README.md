@@ -54,6 +54,12 @@ yarn add @rikology/adonisjs-audit-trail
 
 The `configure` command publishes `config/audit.ts`, migrations, the audit transformer, and registers the provider, commands, and middleware.
 
+For CI or other non-interactive environments, pass flags to skip the prompts:
+
+```bash
+node ace configure @rikology/adonisjs-audit-trail --outbox --no-multi-tenant --immutability
+```
+
 ### 2. Run migrations
 
 ```bash
