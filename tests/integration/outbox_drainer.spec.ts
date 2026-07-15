@@ -334,6 +334,7 @@ withDatabases('Audit outbox drainer', (group, dialect) => {
           tenants.push(tenantId)
           return db.connection().transaction(async (trx) => {
             if (dialect === 'postgres') {
+              if (tenantId === null) throw new Error('PostgreSQL tenant executor requires a tenant')
               await trx.rawQuery(`select set_config('app.tenant_id', ?, true)`, [tenantId])
               const setting = (await trx.rawQuery(
                 `select current_setting('app.tenant_id', true) as tenant_id`

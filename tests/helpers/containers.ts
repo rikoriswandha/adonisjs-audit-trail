@@ -81,6 +81,7 @@ async function startMysql(): Promise<ContainerHandle> {
       MYSQL_USER: 'audit',
       MYSQL_PASSWORD: 'audit',
     })
+    .withCommand(['--log-bin-trust-function-creators=1'])
     .withExposedPorts(3306)
     .withStartupTimeout(120_000)
     .start()
