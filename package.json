@@ -1,7 +1,7 @@
 {
   "name": "@rikology/adonisjs-audit-trail",
   "description": "Production-grade, tamper-evident audit trail for AdonisJS v7",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "homepage": "https://github.com/rikoriswandha/adonisjs-audit-trail#readme",
   "repository": {
     "type": "git",
