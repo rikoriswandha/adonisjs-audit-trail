@@ -6,16 +6,35 @@ This project adheres to [Semantic Versioning](https://semver.org/) and uses [Con
 
 ## Unreleased
 
+## 1.2.0 - 2026-07-15
+
 ### Added
 
-- Runnable AdonisJS demo app under `examples/demo`.
+- Unified guarantee-aware submission for explicit events, model hooks, and authentication listeners, including caller-owned Lucid transactions.
+- Idempotent two-connection transactional-outbox relay with durable claim, retry, failure, requeue, poison-row, and metrics state.
+- Tenant-aware source executors for keeping PostgreSQL transaction-local RLS context attached to outbox claims and acknowledgements.
+- Public audit query, stream discovery, transaction-bound store, retention, subject-key, anchor, and typed delivery-error contracts.
+- Durable archive markers and chain checkpoints so retention retries are idempotent and verification can continue after pruning.
+- Runnable AdonisJS demo application under `examples/demo`.
+
+### Changed
+
+- `Auditable` model hooks now route through `AuditService`; transactional-outbox events are written in the business transaction and non-outbox events are submitted after commit.
+- Pipeline shutdown, fanout, stream, Lucid, and delivery notification paths now preserve ordering and report terminal failures consistently.
+- `audit:verify` discovers streams from the configured store and supports named connections.
+- Generated migrations create tables before deferred PostgreSQL, MySQL, or SQLite immutability triggers.
+- The packed consumer harness now verifies fresh SQLite, PostgreSQL, and MySQL applications.
 
 ### Fixed
 
-- `audit_outbox` migration stub was missing the `attempts` column that `writeOutbox()` and the drainer write to, causing every transactional-outbox insert to fail with a SQL error.
-- `audit_outbox` migration stub used `uuid('id')` but the mixin never populated it; rows shared `NULL` ids so the drainer's claim step matched every row at once and stalled the outbox. Stub now uses an auto-increment id to match the runtime contract.
-- `node ace configure` no longer hangs in non-interactive/CI environments; pass `--outbox`/`--no-outbox`, `--multi-tenant`/`--no-multi-tenant`, and `--immutability`/`--no-immutability` to skip the prompts.
-- ESLint config now explicitly ignores `examples/**` so building from source no longer depends on the root `tsconfig` exclude.
+- Transactional-outbox configure selections now generate the selected guarantee, source connection, and source table without unused imports.
+- Outbox target success followed by source acknowledgement failure now replays without duplicating the target event or delivery notification.
+- Malformed multi-event outbox payloads fail atomically instead of partially reaching the target.
+- Crypto-shredding keys are tenant-scoped and first-write-wins; tenant IDs and redaction hash inputs are validated and normalized.
+- Retention maintenance can prune immutable rows through an explicit dialect-specific maintenance callback while ordinary updates and deletes remain blocked.
+- `audit_outbox` migrations now match the runtime UUID, payload, tenant, lifecycle, retry, timestamp, and error columns.
+- Non-interactive configure flags no longer hang CI or generate missing artifacts.
+- ESLint ignores `examples/**`, so source builds do not depend on the root TypeScript project including the demo.
 
 ## 1.0.0
 

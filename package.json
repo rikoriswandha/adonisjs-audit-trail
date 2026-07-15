@@ -179,7 +179,9 @@
       "@release-it/conventional-changelog": {
         "preset": {
           "name": "angular"
-        }
+        },
+        "infile": "CHANGELOG.md",
+        "header": "# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThis project adheres to [Semantic Versioning](https://semver.org/) and uses [Conventional Commits](https://www.conventionalcommits.org/) for changelog generation. Releases are managed with `release-it`; contributors do not need to edit this file manually.\n\n## Unreleased"
       }
     }
   },
