@@ -4,7 +4,6 @@
   })
 }}}
 import { defineConfig, stores } from '@rikology/adonisjs-audit-trail'
-import env from '#start/env'
 
 export default defineConfig({
   /**
@@ -18,18 +17,37 @@ export default defineConfig({
    * - 'request-coupled': hold the response until the audit is durably written
    * - 'transactional-outbox': write to an outbox table inside the business transaction
    */
+  {{#if outbox}}
+  guarantee: 'transactional-outbox',
+  {{/if}}
+  {{#if !outbox}}
   guarantee: 'best-effort',
+  {{/if}}
 
   /**
    * Configured stores. The lucid store requires @adonisjs/lucid.
    */
   stores: {
     lucid: stores.lucid({
-      table: 'audits',
-      enforceImmutability: {{ immutability }},
-      // connection: 'audit', // Optional: use a dedicated audit DB connection.
+      table: '{{ auditTable }}',
+      {{#if auditConnection}}
+      connection: '{{ auditConnection }}',
+      {{/if}}
     }),
   },
+
+  {{#if outbox}}
+  /**
+   * Source connection/table used for transactional outbox intent rows.
+   * The target audit store remains configured above.
+   */
+  outbox: {
+    table: '{{ outboxTable }}',
+    {{#if outboxConnection}}
+    connection: '{{ outboxConnection }}',
+    {{/if}}
+  },
+  {{/if}}
 
   /**
    * PII / sensitive field redaction.
@@ -56,8 +74,12 @@ export default defineConfig({
    * Hash-chain configuration.
    */
   chain: {
-    enabled: true,
-    streamBy: '{{#if multiTenant}}tenant{{/if}}{{#if !multiTenant}}global{{/if}}',
+    {{#if multiTenant}}
+    streamBy: 'tenant',
+    {{/if}}
+    {{#if !multiTenant}}
+    streamBy: 'global',
+    {{/if}}
   },
 
   /**

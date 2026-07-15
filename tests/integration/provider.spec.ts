@@ -97,7 +97,7 @@ withDatabases('AuditProvider', (group, dialect) => {
     assert.lengthOf(row!.prevHash, 64)
   })
 
-  test('provider pipeline applies configured redaction before writing', async ({ assert }) => {
+  test('provider applies configured redaction before writing', async ({ assert }) => {
     await cleanupTestApp(app)
     app = await createTestApp(
       {
@@ -165,8 +165,12 @@ withDatabases('AuditProvider', (group, dialect) => {
       .insertQuery()
       .table('audit_outbox')
       .insert({
+        id: crypto.randomUUID(),
         payload: JSON.stringify(makeOutboxEvent()),
+        tenant_id: null,
+        status: 'pending',
         attempts: 0,
+        available_at: new Date(),
         created_at: new Date(),
       })
 

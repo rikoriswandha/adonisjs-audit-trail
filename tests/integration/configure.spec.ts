@@ -2,9 +2,20 @@ import { test } from '@japa/runner'
 import { configure } from '../../configure.js'
 import { stubsRoot } from '../../stubs/main.js'
 
+type StubCall = {
+  root: string
+  path: string
+  data: Record<string, unknown>
+}
+
 test.group('Configure hook', () => {
   test('prompts for options and wires all codemods', async ({ assert }) => {
-    const calls: Record<string, unknown[]> = {
+    const calls: {
+      makeUsingStub: StubCall[]
+      updateRcFile: unknown[]
+      registerMiddleware: unknown[]
+      defineEnvValidations: unknown[]
+    } = {
       makeUsingStub: [],
       updateRcFile: [],
       registerMiddleware: [],
@@ -51,12 +62,19 @@ test.group('Configure hook', () => {
       {
         root: stubsRoot,
         path: 'config/audit.stub',
-        data: { outbox: false, multiTenant: false, immutability: true },
+        data: {
+          auditConnection: undefined,
+          auditTable: 'audits',
+          multiTenant: false,
+          outbox: false,
+          outboxConnection: undefined,
+          outboxTable: 'audit_outbox',
+        },
       },
       {
         root: stubsRoot,
         path: 'migrations/create_audits_table.stub',
-        data: { immutability: true, multiTenant: false },
+        data: { auditConnection: undefined, auditTable: 'audits', immutability: true },
       },
       { root: stubsRoot, path: 'transformers/audit_transformer.stub', data: {} },
       { root: stubsRoot, path: 'start/audit_events.stub', data: {} },
@@ -119,7 +137,10 @@ test.group('Configure hook', () => {
   })
 
   test('uses CLI flags without prompting', async ({ assert }) => {
-    const calls: Record<string, unknown[]> = { makeUsingStub: [], updateRcFile: [] }
+    const calls: { makeUsingStub: StubCall[]; updateRcFile: unknown[] } = {
+      makeUsingStub: [],
+      updateRcFile: [],
+    }
     let prompted = false
 
     const codemods = {
@@ -138,7 +159,15 @@ test.group('Configure hook', () => {
     }
 
     const command = {
-      parsedFlags: { 'outbox': true, 'multi-tenant': false, 'immutability': false },
+      parsedFlags: {
+        'audit-connection': 'audit',
+        'audit-table': 'audit_log',
+        'immutability': false,
+        'multi-tenant': false,
+        'outbox': true,
+        'outbox-connection': 'primary',
+        'outbox-table': 'audit_outbox',
+      },
       prompt: {
         confirm: async () => {
           prompted = true
@@ -157,16 +186,23 @@ test.group('Configure hook', () => {
 
     assert.isFalse(prompted, 'no prompts when all flags provided')
     assert.isTrue(
-      calls.makeUsingStub.some(
-        (c) => (c as any).path === 'migrations/create_audit_outbox_table.stub'
-      ),
+      calls.makeUsingStub.some((call) => call.path === 'migrations/create_audit_outbox_table.stub'),
       'outbox migration published when --outbox flag is true'
     )
-    const configCall = calls.makeUsingStub.find((c) => (c as any).path === 'config/audit.stub') as
-      | { data: Record<string, unknown> }
-      | undefined
+    const configCall = calls.makeUsingStub.find((call) => call.path === 'config/audit.stub')
     assert.isDefined(configCall, 'config stub published')
     assert.equal(configCall!.data.outbox, true, 'outbox flag flows to config stub')
-    assert.equal(configCall!.data.immutability, false, 'immutability flag flows to config stub')
+    assert.equal(
+      configCall!.data.auditConnection,
+      'audit',
+      'target connection flows to config stub'
+    )
+    assert.equal(configCall!.data.auditTable, 'audit_log', 'target table flows to config stub')
+    assert.equal(
+      configCall!.data.outboxConnection,
+      'primary',
+      'source connection flows to config stub'
+    )
+    assert.equal(configCall!.data.outboxTable, 'audit_outbox', 'source table flows to config stub')
   })
 })

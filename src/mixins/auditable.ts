@@ -2,16 +2,21 @@ import app from '@adonisjs/core/services/app'
 import { type BaseModel } from '@adonisjs/lucid/orm'
 import type { NormalizeConstructor } from '@adonisjs/core/types/helpers'
 import type { LucidModel, LucidRow, ModelObject } from '@adonisjs/lucid/types/model'
-import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
-import type { AuditEvent, AuditableModelConfig, AuditRuntimeEvents } from '../types.js'
+import type { AuditEvent, AuditableModelConfig, AuditableModelInstance } from '../types.js'
 import type { ResolvedAuditConfig } from '../define_config.js'
-import { assembleEvent } from '../core/assembler.js'
 import { createRedactor } from '../core/redactor.js'
-import { AuditPipelineRejectedError } from '../core/errors.js'
-import { auditContext } from '../audit_context.js'
+import { AuditTransactionRequiredError } from '../core/errors.js'
 import Audit from '../models/audit.js'
 
-type AuditableConstructor = LucidModel & {
+type AuditableModelConstructor = LucidModel & {
+  auditConfig?: AuditableModelConfig
+}
+
+type AuditableConstructor<T extends NormalizeConstructor<typeof BaseModel>> = Omit<
+  T,
+  'prototype'
+> & {
+  new (...args: ConstructorParameters<T>): InstanceType<T> & AuditableModelInstance
   auditConfig?: AuditableModelConfig
 }
 
@@ -48,9 +53,10 @@ export function Auditable<T extends NormalizeConstructor<typeof BaseModel>>(supe
     }
 
     audits() {
-      return Audit.query()
-        .where('auditable_type', this.constructor.name)
-        .where('auditable_id', String(getPrimaryKeyValue(this)))
+      const query = this.$trx
+        ? Audit.query({ client: this.$trx })
+        : Audit.query({ connection: this.$options?.connection })
+      return query.withScopes((scopes) => scopes.forModel(this))
     }
 
     async lastAudit() {
@@ -58,7 +64,7 @@ export function Auditable<T extends NormalizeConstructor<typeof BaseModel>>(supe
     }
   }
 
-  return AuditableModel as typeof superclass & { auditConfig?: AuditableModelConfig }
+  return AuditableModel as unknown as AuditableConstructor<T>
 }
 
 async function captureUpdateEvent(model: LucidRow): Promise<void> {
@@ -107,23 +113,17 @@ async function emitModelEvent(
 ): Promise<void> {
   const modelConfig = getConfig(model)
   const config = await app.container.make('audit.config')
-  const context = auditContext.get() ?? {}
+  const audit = await app.container.make('audit')
   const localRedactor = buildLocalRedactor(modelConfig, config)
-  const event = await assembleEvent(
-    {
-      event: `model.${kind}`,
-      auditableType: getModelConstructor(model).name,
-      auditableId: String(getPrimaryKeyValue(model)),
-      oldValues: oldValues === null ? null : localRedactor(oldValues),
-      newValues: newValues === null ? null : localRedactor(newValues),
-      tags: modelConfig.tags ?? [],
-    },
-    context,
-    {
-      payloadMaxBytes: config.payloadMaxBytes,
-      streamBy: config.chain.streamBy,
-    }
-  )
+  const event = await audit.assemble({
+    event: `model.${kind}`,
+    auditableType: getModelConstructor(model).name,
+    auditableId: String(getPrimaryKeyValue(model)),
+    oldValues: oldValues === null ? null : localRedactor(oldValues),
+    newValues: newValues === null ? null : localRedactor(newValues),
+    tags: modelConfig.tags ?? [],
+    transaction: model.$trx,
+  })
 
   await emitWithGuarantee({ event, strict: modelConfig.strict === true }, model, config)
 }
@@ -134,74 +134,32 @@ async function emitWithGuarantee(
   config: ResolvedAuditConfig
 ): Promise<void> {
   try {
-    const trx = model.$trx
-    if (trx && config.guarantee === 'transactional-outbox') {
-      await writeOutbox(trx, await redactForOutbox(emission.event))
-      return
-    }
-
-    if (trx) {
-      trx.after('commit', async () => {
-        await enqueueEvent(emission.event)
+    const audit = await app.container.make('audit')
+    if (model.$trx && config.guarantee !== 'transactional-outbox') {
+      model.$trx.after('commit', async () => {
+        try {
+          await audit.submit(emission.event, { source: 'model' })
+        } catch {}
       })
       return
     }
 
-    await enqueueEvent(emission.event)
-  } catch (error) {
-    await emitAuditError(emission.event, error)
-    if (emission.strict) throw error
-  }
-}
-
-async function enqueueEvent(event: AuditEvent): Promise<void> {
-  const pipeline = await app.container.make('audit.pipeline')
-  const accepted = pipeline.enqueue(event)
-  if (!accepted) {
-    throw new AuditPipelineRejectedError()
-  }
-}
-
-async function redactForOutbox(event: AuditEvent): Promise<AuditEvent> {
-  const redactor = await app.container.make('audit.redactor')
-  return {
-    ...event,
-    oldValues: event.oldValues === null ? null : redactor.redact(event.oldValues),
-    newValues: event.newValues === null ? null : redactor.redact(event.newValues),
-    metadata: event.metadata === null ? null : redactor.redact(event.metadata),
-  }
-}
-
-async function writeOutbox(trx: TransactionClientContract, event: AuditEvent): Promise<void> {
-  const now = new Date()
-  await trx
-    .insertQuery()
-    .table('audit_outbox')
-    .insert({
-      payload: JSON.stringify({ event }),
-      attempts: 0,
-      claimed_at: null,
-      processed_at: null,
-      created_at: now,
-      updated_at: now,
-    })
-}
-
-async function emitAuditError(event: AuditEvent | null, error: unknown): Promise<void> {
-  try {
-    const emitter = await app.container.make('emitter')
-    await emitter.emit('audit:error', {
-      event,
-      error,
+    await audit.submit(emission.event, {
+      transaction: model.$trx,
       source: 'model',
-    } satisfies AuditRuntimeEvents['audit:error'])
-  } catch {}
+    })
+  } catch (error) {
+    if (!model.$trx || emission.strict || error instanceof AuditTransactionRequiredError)
+      throw error
+  }
 }
 
 function buildUpdateSnapshot(model: LucidRow): UpdateSnapshot {
   const dirtyKeys = new Set(Object.keys(model.$dirty))
-  const oldValues = serializeModel(model, dirtyKeys, model.$original)
-  const newValues = serializeModel(model, dirtyKeys, model.$attributes)
+  const config = getConfig(model)
+  const onlyKeys = config.snapshot === 'full' ? undefined : dirtyKeys
+  const oldValues = serializeModel(model, onlyKeys, model.$original)
+  const newValues = serializeModel(model, onlyKeys, model.$attributes)
   return removeExcluded(model, oldValues, newValues)
 }
 
@@ -282,13 +240,16 @@ function getConfig(model: LucidRow): AuditableModelConfig {
   return getModelConstructor(model).auditConfig ?? {}
 }
 
-function getModelConstructor(model: LucidRow): AuditableConstructor {
-  return model.constructor as AuditableConstructor
+function getModelConstructor(model: LucidRow): AuditableModelConstructor {
+  return model.constructor as AuditableModelConstructor
 }
 
 function getPrimaryKeyValue(model: LucidRow): string | number {
-  const primaryKey = getModelConstructor(model).primaryKey
-  const value = model.$primaryKeyValue ?? model.$attributes[primaryKey]
+  const modelConstructor = getModelConstructor(model)
+  const primaryKey =
+    [...modelConstructor.$columnsDefinitions].find(([, column]) => column.isPrimary)?.[0] ??
+    modelConstructor.primaryKey
+  const value = model.$attributes[primaryKey] ?? model.$primaryKeyValue
   return value as string | number
 }
 

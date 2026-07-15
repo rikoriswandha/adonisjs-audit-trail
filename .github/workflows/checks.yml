@@ -36,6 +36,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
         node-version: [24]
+    env:
+      SKIP_DOCKER_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
@@ -45,14 +47,14 @@ jobs:
       - name: Install
         run: npm install
       - name: Run unit tests with coverage gate (SQLite only)
-        run: SKIP_DOCKER_TESTS=1 npm test
+        run: npm test
 
   test-integration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [lint, typecheck]
     env:
-      SKIP_DOCKER_TESTS: 0
+      RUN_DOCKER_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -77,9 +79,5 @@ jobs:
           node-version: 24
       - name: Install
         run: npm install
-      - name: Build package
-        run: npm run build
-      - name: Verify package exports resolve
-        run: npm run verify:exports
-      - name: E2E configure smoke test
-        run: bash scripts/e2e-configure.sh
+      - name: Packed consumer harness
+        run: npm run e2e:consumer

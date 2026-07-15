@@ -4,6 +4,7 @@ import Audit from '../../src/models/audit.js'
 import { createTestAppWithDb } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
 import { startContainer, type ContainerHandle } from '../helpers/containers.js'
+import { isDialectEnabled } from '../helpers/dialect.js'
 import type { AuditEvent } from '../../src/types.js'
 import type StoreManager from '../../src/stores/store_manager.js'
 import type LucidStore from '../../src/stores/lucid_store.js'
@@ -170,6 +171,6 @@ function runConcurrencyTests(): void {
   })
 }
 
-if (process.env.SKIP_DOCKER_TESTS !== '1') {
+if (isDialectEnabled('postgres')) {
   runConcurrencyTests()
 }

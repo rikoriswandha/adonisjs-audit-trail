@@ -54,6 +54,14 @@ function createMemoryStore(): AuditStoreContract {
 type TestAuditConfig = {
   default: string
   guarantee: NonNullable<AuditConfig['guarantee']>
+  outbox: {
+    table: string
+    maxAttempts: number
+    retryDelayMs: number
+    staleClaimMs: number
+    connection?: NonNullable<AuditConfig['outbox']>['connection']
+    executor?: NonNullable<AuditConfig['outbox']>['executor']
+  }
   stores: Record<string, unknown>
   redaction: Required<NonNullable<AuditConfig['redaction']>>
   retention: {
@@ -70,10 +78,11 @@ type TestAuditConfig = {
 const defaultAuditConfig = {
   default: 'memory',
   guarantee: 'best-effort',
+  outbox: { table: 'audit_outbox', maxAttempts: 5, retryDelayMs: 0, staleClaimMs: 5 * 60 * 1000 },
   stores: { memory: createMemoryStore },
   redaction: { global: [], mode: 'mask', saltEnvVar: 'AUDIT_REDACTION_SALT' },
   retention: { default: '730 days' },
-  chain: { enabled: true, streamBy: 'global' },
+  chain: { streamBy: 'global' },
   queue: { maxBatchSize: 200, flushIntervalMs: 5, capacity: 10_000, overflow: 'dropOldest' },
   payloadMaxBytes: 32_768,
   captureAuthEvents: true,
@@ -98,6 +107,10 @@ function resolveAuditConfig(auditConfig: Partial<AuditConfig>): TestAuditConfig 
     queue: {
       ...defaultAuditConfig.queue,
       ...auditConfig.queue,
+    },
+    outbox: {
+      ...defaultAuditConfig.outbox,
+      ...auditConfig.outbox,
     },
     stores: (auditConfig.stores ?? defaultAuditConfig.stores) as Record<string, unknown>,
     default: String(auditConfig.default ?? defaultAuditConfig.default),

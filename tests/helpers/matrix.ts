@@ -1,7 +1,7 @@
 import { test } from '@japa/runner'
-import type { DbDialect } from './containers.js'
+import { DB_DIALECTS, isDialectEnabled, type DbDialect } from './dialect.js'
 
-export const DB_MATRIX: DbDialect[] = ['sqlite', 'postgres', 'mysql']
+export const DB_MATRIX: readonly DbDialect[] = DB_DIALECTS
 
 export function withDatabases(
   name: string,
@@ -11,7 +11,7 @@ export function withDatabases(
   const dialects = options.only ?? DB_MATRIX
 
   for (const dialect of dialects) {
-    if (dialect !== 'sqlite' && process.env.SKIP_DOCKER_TESTS === '1') {
+    if (!isDialectEnabled(dialect)) {
       continue
     }
 

@@ -1,9 +1,7 @@
 import { BaseCommand, flags } from '@adonisjs/core/ace'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
-import Audit from '../src/models/audit.js'
-import type StoreManager from '../src/stores/store_manager.js'
-import type { ChainHead, VerifyReport } from '../src/types.js'
+import type { AuditStoreContract, ChainHead, VerifyReport } from '../src/types.js'
 import type { ResolvedAuditConfig } from '../src/define_config.js'
 
 export default class AuditVerify extends BaseCommand {
@@ -31,7 +29,7 @@ export default class AuditVerify extends BaseCommand {
     const config = (await this.app.container.make('audit.config')) as ResolvedAuditConfig
     const store = manager.use()
 
-    const streams = await this.#resolveStreams(store, manager.default)
+    const streams = await this.#resolveStreams(store)
     if (streams.length === 0) {
       this.logger.warning('No audit streams found to verify')
       return
@@ -84,23 +82,17 @@ export default class AuditVerify extends BaseCommand {
     }
   }
 
-  async #resolveStreams(
-    store: ReturnType<StoreManager['use']>,
-    storeName: string
-  ): Promise<string[]> {
+  async #resolveStreams(store: AuditStoreContract): Promise<string[]> {
     if (this.stream) {
       return [this.stream]
     }
 
-    if (storeName !== 'lucid' && !('query' in store)) {
-      this.logger.warning(
-        'Stream auto-detection is only supported for the lucid store. Use --stream.'
-      )
+    if (!store.listStreams) {
+      this.logger.warning('Stream auto-detection is not supported by this store. Use --stream.')
       return []
     }
 
-    const rows = await Audit.query().distinct('stream')
-    return rows.map((row) => row.stream)
+    return store.listStreams()
   }
 
   #printReport(report: VerifyReport) {
@@ -116,7 +108,7 @@ export default class AuditVerify extends BaseCommand {
 
   async #verifyAnchor(
     config: ResolvedAuditConfig,
-    store: ReturnType<StoreManager['use']>,
+    store: AuditStoreContract,
     stream: string
   ): Promise<boolean> {
     const anchorsFile = config.chain.anchor?.anchorsFile
@@ -143,27 +135,28 @@ export default class AuditVerify extends BaseCommand {
       return true
     }
 
-    const latest = anchors[anchors.length - 1]!
-    const head = await store.head(stream)
-
-    if (!head) {
-      this.logger.error(`Stream "${stream}" has anchors but no store head`)
-      return false
-    }
-
-    if (head.seq < latest.seq) {
+    if (typeof store.resolveSequenceHash !== 'function') {
       this.logger.error(
-        `Anchor ahead of store head in stream "${stream}": anchor seq ${latest.seq}, head seq ${head.seq}`
+        `Store cannot resolve exact anchored sequences for stream "${stream}"; refusing anchor verification`
       )
       return false
     }
 
-    if (head.seq === latest.seq && head.hash !== latest.hash) {
-      this.logger.error(`Anchor hash mismatch in stream "${stream}" at seq ${latest.seq}`)
-      return false
+    for (const anchor of anchors) {
+      const hash = await store.resolveSequenceHash(anchor.stream, anchor.seq)
+      if (hash === null) {
+        this.logger.error(
+          `Anchored sequence is unavailable in stream "${stream}" at seq ${anchor.seq}`
+        )
+        return false
+      }
+      if (hash !== anchor.hash) {
+        this.logger.error(`Anchor hash mismatch in stream "${stream}" at seq ${anchor.seq}`)
+        return false
+      }
     }
 
-    this.logger.log(`✓ stream="${stream}" anchor seq=${latest.seq} hash matched`)
+    this.logger.log(`✓ stream="${stream}" ${anchors.length} anchored sequence(s) matched`)
     return true
   }
 }

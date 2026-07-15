@@ -38,13 +38,19 @@ Exit codes:
 A pure hash chain detects tampering but not whole-suffix deletion. Enable anchoring to catch truncation:
 
 ```ts
-chain: {
-  enabled: true,
-  anchor: {
-    every: 1000,
-    publish: stores.anchor.file({ path: 'storage/audit-anchors.ndjson' }),
+import { defineConfig, fileAppendPublisher, stores } from '@rikology/adonisjs-audit-trail'
+
+const publishAnchor = await fileAppendPublisher('storage/audit-anchors.ndjson')
+
+export default defineConfig({
+  stores: { lucid: stores.lucid() },
+  chain: {
+    anchor: {
+      every: 1000,
+      publish: publishAnchor,
+    },
   },
-}
+})
 ```
 
 Anchors record the current chain head periodically. Use `--check-anchors` to compare the database head against the latest anchor.

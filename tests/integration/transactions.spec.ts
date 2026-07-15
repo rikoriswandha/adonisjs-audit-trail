@@ -6,6 +6,8 @@ import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 import { runMigrations } from '../helpers/migrate.js'
 import { withDatabases } from '../helpers/matrix.js'
 import { Post } from '../helpers/models.js'
+import AuditOutboxDrainer from '../../src/core/outbox_drainer.js'
+import type { SuccessfulDeliveryNotifier } from '../../src/core/successful_delivery_notifier.js'
 
 function createSlowStore(base: AuditStoreContract, delayMs: number): AuditStoreContract {
   return {
@@ -128,15 +130,21 @@ withDatabases('Auditable transactions', (_group, dialect) => {
       const store = createSlowStore(manager.use(), 50)
 
       await client.table('audit_outbox').insert({
+        id: crypto.randomUUID(),
         payload: JSON.stringify({ event: makeOutboxEvent() }),
+        tenant_id: null,
+        status: 'pending',
         attempts: 0,
+        available_at: new Date(),
         created_at: new Date(),
         updated_at: new Date(),
       })
 
-      const { default: AuditOutboxDrainer } = await import('../../src/core/outbox_drainer.js')
-      const drainer1 = new AuditOutboxDrainer(app, store)
-      const drainer2 = new AuditOutboxDrainer(app, store)
+      const notifier = (await app.container.make(
+        'audit.delivery_notifier'
+      )) as SuccessfulDeliveryNotifier
+      const drainer1 = new AuditOutboxDrainer(app, store, {}, notifier)
+      const drainer2 = new AuditOutboxDrainer(app, store, {}, notifier)
 
       const [processed1, processed2] = await Promise.all([drainer1.drain(), drainer2.drain()])
 

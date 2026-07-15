@@ -78,4 +78,15 @@ test.group('createRedactor', () => {
       `sha256:${createHash('sha256').update('s42').digest('hex')}`
     )
   })
+  test('hashes structured values using canonical key order', ({ assert }) => {
+    const { redact } = createRedactor({ paths: ['profile'], mode: 'hash', salt: 's' })
+    const first = redact({ profile: { b: 2, a: { z: 'last', y: 'first' } } })
+    const second = redact({ profile: { a: { y: 'first', z: 'last' }, b: 2 } })
+    const expected = `sha256:${createHash('sha256')
+      .update('s{"a":{"y":"first","z":"last"},"b":2}')
+      .digest('hex')}`
+
+    assert.equal(first.profile, expected)
+    assert.equal(second.profile, expected)
+  })
 })

@@ -6,6 +6,7 @@ import type {
   ModelAdapterOptions,
   ModelQueryBuilderContract,
 } from '@adonisjs/lucid/types/model'
+import type { AuditActorReference } from '../types.js'
 import type { DateTime } from 'luxon'
 import { AuditImmutableError } from '../core/errors.js'
 
@@ -19,6 +20,40 @@ function consumeJsonArray(value: unknown): string[] {
   if (value === null) return []
   if (typeof value === 'string') return JSON.parse(value) as string[]
   return value as string[]
+}
+
+interface AuditableModelReference {
+  constructor: {
+    name: string
+    primaryKey?: string
+  }
+  $primaryKeyValue?: unknown
+  $attributes?: Record<string, unknown>
+}
+
+function resolveModelPrimaryKey(model: AuditableModelReference): string {
+  const primaryKey = model.constructor.primaryKey ?? 'id'
+  const attributes = model.$attributes ?? {}
+  const value =
+    model.$primaryKeyValue ??
+    attributes[primaryKey] ??
+    (model as unknown as Record<string, unknown>)[primaryKey]
+
+  if (value === null || value === undefined) {
+    throw new TypeError(`Cannot query audits for a model without primary key "${primaryKey}"`)
+  }
+
+  return String(value)
+}
+
+function resolveActorType(actor: AuditActorReference): string {
+  if (actor.type) return actor.type
+
+  const type = actor.constructor?.auditActorType
+  if (type) return type
+
+  const constructorName = actor.constructor?.name
+  return constructorName && constructorName !== 'Object' ? constructorName.toLowerCase() : 'user'
 }
 
 export default class Audit extends BaseModel {
@@ -109,24 +144,22 @@ export default class Audit extends BaseModel {
   @column.dateTime({ autoCreate: true })
   declare createdAt: DateTime
 
-  static forModel = scope(
-    (query, model: { constructor: { name: string }; id: string | number }) => {
-      return query
-        .where('auditable_type', model.constructor.name)
-        .where('auditable_id', String(model.id))
-    }
-  )
-
-  static forRef = scope((query, type: string, id: string) => {
-    return query.where('auditable_type', type).where('auditable_id', id)
+  static forModel = scope((query, model: AuditableModelReference) => {
+    return query
+      .where('auditable_type', model.constructor.name)
+      .where('auditable_id', resolveModelPrimaryKey(model))
   })
 
-  static byActor = scope(
-    (query, actor: { id: string | number; constructor?: { name?: string } }) => {
-      const type = actor.constructor?.name ?? 'user'
-      return query.where('actor_type', type).where('actor_id', String(actor.id))
-    }
-  )
+  static forRef = scope((query, type: string, id: string | number) => {
+    return query.where('auditable_type', type).where('auditable_id', String(id))
+  })
+
+  static byActor = scope((query, actor: AuditActorReference) => {
+    const actorQuery = query.where('actor_type', resolveActorType(actor))
+    return actor.id === null
+      ? actorQuery.whereNull('actor_id')
+      : actorQuery.where('actor_id', String(actor.id))
+  })
 
   static inTenant = scope((query, id: string) => {
     return query.where('tenant_id', id)
@@ -214,3 +247,5 @@ export default class Audit extends BaseModel {
     throw new AuditImmutableError()
   }
 }
+
+export type AuditQuery = ModelQueryBuilderContract<typeof Audit>

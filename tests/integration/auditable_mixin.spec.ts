@@ -67,6 +67,34 @@ class SoftPost extends Auditable(BaseModel) {
   declare deletedAt: DateTime | null
 }
 
+class FullSnapshotPost extends Auditable(BaseModel) {
+  static table = 'posts'
+  static auditConfig: AuditableModelConfig = { snapshot: 'full' }
+
+  @column({ isPrimary: true })
+  declare id: number
+
+  @column()
+  declare title: string
+
+  @column()
+  declare body: string | null
+
+  @column.dateTime({ autoCreate: true })
+  declare createdAt: DateTime
+}
+
+class UuidPost extends Auditable(BaseModel) {
+  static table = 'custom_key_posts'
+  static primaryKey = 'uuid'
+
+  @column({ isPrimary: true })
+  declare uuid: number
+
+  @column()
+  declare title: string
+}
+
 async function createLucidApp(dialect: string = 'sqlite', auditConfig = {}) {
   const app = await createTestApp(
     {
@@ -106,6 +134,13 @@ async function migrateExtraTables(app: ApplicationService): Promise<void> {
       table.timestamp('deleted_at').nullable()
     })
   }
+
+  if (!(await client.schema.hasTable('custom_key_posts'))) {
+    await client.schema.createTable('custom_key_posts', (table) => {
+      table.increments('uuid')
+      table.string('title').notNullable()
+    })
+  }
 }
 
 async function waitForAudits(expected: number): Promise<void> {
@@ -120,7 +155,7 @@ withDatabases('Auditable mixin', (group, dialect) => {
   let app: ApplicationService
 
   group.each.setup(async () => {
-    app = await createLucidApp(dialect)
+    app = await createLucidApp(dialect, { guarantee: 'request-coupled' })
   })
 
   group.each.teardown(async () => {
@@ -145,7 +180,7 @@ withDatabases('Auditable mixin', (group, dialect) => {
 
     await waitForAudits(1)
     const row = await Audit.query().where('event', 'model.created').firstOrFail()
-    const relatedRows = await (post as Post & { audits: () => Promise<Audit[]> }).audits()
+    const relatedRows = await post.audits()
 
     assert.equal(row.actorType, 'user')
     assert.equal(row.actorId, '42')
@@ -191,6 +226,87 @@ withDatabases('Auditable mixin', (group, dialect) => {
 
     assert.deepEqual(row.newValues?.payload, { nested: { ok: true } })
     assert.notProperty(row.newValues!, 'secret')
+  })
+
+  test('records full old and new snapshots when configured', async ({ assert }) => {
+    const post = await FullSnapshotPost.createQuietly({ title: 'Old', body: 'Body' })
+
+    post.title = 'New'
+    await post.save()
+    await waitForAudits(1)
+
+    const row = await Audit.query().where('auditable_type', 'FullSnapshotPost').firstOrFail()
+    assert.deepEqual(row.oldValues, {
+      id: post.id,
+      title: 'Old',
+      body: 'Body',
+      createdAt: post.createdAt.toISO(),
+    })
+    assert.deepEqual(row.newValues, {
+      id: post.id,
+      title: 'New',
+      body: 'Body',
+      createdAt: post.createdAt.toISO(),
+    })
+  })
+
+  test('uses custom primary keys for model event submission and audit lookup', async ({
+    assert,
+  }) => {
+    assert.equal(UuidPost.primaryKey, 'uuid')
+    const post = await UuidPost.create({ title: 'Custom key' })
+    const primaryKey = String(post.uuid)
+    await waitForAudits(1)
+
+    const row = await Audit.query()
+      .where('auditable_type', 'UuidPost')
+      .where('auditable_id', primaryKey)
+      .firstOrFail()
+    assert.equal(row.auditableId, primaryKey)
+    assert.lengthOf(await post.audits(), 1)
+  })
+
+  test('surfaces request-coupled model delivery failures without a transaction', async ({
+    assert,
+  }) => {
+    const pipeline = await app.container.make('audit.pipeline')
+    pipeline.requestCoupledFlush = async () => {
+      throw new Error('target store unavailable')
+    }
+
+    await assert.rejects(
+      () => Post.create({ title: 'Audit target unavailable', body: null }),
+      /target store unavailable/
+    )
+  })
+
+  test('reports post-commit model delivery failures without rolling back business data', async ({
+    assert,
+  }) => {
+    const emitter = await app.container.make('emitter')
+    const reportedSources: string[] = []
+    emitter.on('audit:error', (payload) => {
+      reportedSources.push(payload.source)
+    })
+
+    const pipeline = await app.container.make('audit.pipeline')
+    pipeline.requestCoupledFlush = async () => {
+      throw new Error('target store unavailable')
+    }
+
+    const db = await app.container.make('lucid.db')
+    await db.transaction(async (transaction) => {
+      const post = new Post()
+      post.title = 'Committed despite audit target failure'
+      post.body = null
+      post.useTransaction(transaction)
+      await post.save()
+    })
+
+    assert.isNotNull(
+      await Post.query().where('title', 'Committed despite audit target failure').first()
+    )
+    assert.deepEqual(reportedSources, ['model'])
   })
 
   test('captures deletes and restore-style deletedAt transitions', async ({ assert }) => {

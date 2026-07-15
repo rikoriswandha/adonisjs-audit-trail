@@ -2,7 +2,8 @@ import { test } from '@japa/runner'
 import type { ApplicationService } from '@adonisjs/core/types'
 import { Kernel } from '@adonisjs/core/ace'
 import type { BaseCommand } from '@adonisjs/core/ace'
-import { mkdtempSync, existsSync } from 'node:fs'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
+import { mkdtempSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
@@ -20,6 +21,19 @@ import AuditForget from '../../commands/audit_forget.js'
 import { fileAppendPublisher } from '../../src/core/anchor.js'
 import { MemorySubjectKeyStore } from '../../src/core/subject_crypto.js'
 
+function privilegedMaintenance(dialect: string) {
+  return async (trx: TransactionClientContract) => {
+    if (dialect === 'postgres') {
+      await trx.rawQuery("SELECT set_config('audit.maintenance', 'prune', true)")
+      return
+    }
+    if (dialect === 'mysql' || dialect === 'mysql2') {
+      await trx.rawQuery("SET @audit_maintenance = 'prune'")
+      return
+    }
+    await trx.insertQuery().table('audit_maintenance_guard').insert({ operation: 'prune' })
+  }
+}
 async function createCommandApp(dialect: string = 'sqlite', auditConfig = {}) {
   const app = await createTestApp(
     {
@@ -28,7 +42,7 @@ async function createCommandApp(dialect: string = 'sqlite', auditConfig = {}) {
       stores: {
         lucid: async (application: ApplicationService) => {
           const { default: LucidStore } = await import('../../src/stores/lucid_store.js')
-          return new LucidStore(application, {})
+          return new LucidStore(application, { maintenance: privilegedMaintenance(dialect) })
         },
       },
     },
@@ -146,6 +160,34 @@ withDatabases('Audit commands', (group, dialect) => {
     assert.equal(command.exitCode, 0)
   })
 
+  test('audit:verify detects a mismatched older anchor even when the current head differs', async ({
+    assert,
+  }) => {
+    const anchorsFile = join(mkdtempSync(join(tmpdir(), 'audit-anchor-')), 'anchors.ndjson')
+    writeFileSync(
+      anchorsFile,
+      `${JSON.stringify({ stream: 'default', seq: 1, hash: '0'.repeat(64) })}\n`
+    )
+    await cleanupTestApp(app)
+    app = await createCommandApp(dialect, {
+      chain: {
+        anchor: {
+          every: 1,
+          publish: async () => {},
+          anchorsFile,
+        },
+      },
+    })
+    await runMigrations(app)
+
+    const audit = (await app.container.make('audit')) as AuditService
+    await audit.log('user.login').commitSync()
+    await audit.log('user.logout').commitSync()
+
+    const command = await runCommand(app, AuditVerify, ['--check-anchors'])
+    assert.notEqual(command.exitCode, 0)
+  })
+
   test('audit:forget deletes subject key', async ({ assert }) => {
     const keyStore = new MemorySubjectKeyStore()
     app = await createCommandApp(dialect, {
@@ -219,6 +261,7 @@ withDatabases('Audit commands', (group, dialect) => {
       .connection()
       .table('audit_outbox')
       .insert({
+        id: crypto.randomUUID(),
         payload: JSON.stringify({
           id: crypto.randomUUID(),
           event: 'outbox.event',
@@ -240,7 +283,10 @@ withDatabases('Audit commands', (group, dialect) => {
           schemaVersion: '1',
           createdAt: new Date().toISOString(),
         }),
+        tenant_id: null,
+        status: 'pending',
         attempts: 0,
+        available_at: new Date(),
         created_at: new Date(),
       })
 

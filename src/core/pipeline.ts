@@ -9,6 +9,7 @@ import type {
   PipelineStats,
 } from '../types.js'
 import { AuditCoupledTimeoutError } from './errors.js'
+import type { SuccessfulDeliveryNotifier } from './successful_delivery_notifier.js'
 
 export interface PipelineConfig {
   maxBatchSize: number
@@ -37,6 +38,7 @@ export interface PipelineDependencies {
   redactor?: { redact: (data: Record<string, unknown>) => Record<string, unknown> }
   deadLetterHandler?: (events: AuditEvent[]) => void
   emitter?: PipelineEmitter
+  notifier: SuccessfulDeliveryNotifier
 }
 
 export default class AuditPipeline {
@@ -46,15 +48,17 @@ export default class AuditPipeline {
   #routeStore: (event: AuditEvent) => PipelineStoreRoute
   #redactor?: { redact: (data: Record<string, unknown>) => Record<string, unknown> }
   #deadLetterHandler: (events: AuditEvent[]) => void
+  #notifier: SuccessfulDeliveryNotifier
   #emitter?: PipelineEmitter
   #buffer: AuditEvent[]
   #head = 0
   #tail = 0
   #size = 0
-
-  #flushing = false
+  #activeFlush: Promise<void> | null = null
   #flushTimer: ReturnType<typeof setInterval> | null = null
   #started = false
+  #accepting = true
+  #capacityWaiters: (() => void)[] = []
 
   #queued = 0
   #written = 0
@@ -72,6 +76,7 @@ export default class AuditPipeline {
     this.#routeStore = deps.routeStore ?? (() => ({ name: this.#storeName, store: this.#store }))
     this.#redactor = deps.redactor
     this.#deadLetterHandler = deps.deadLetterHandler ?? defaultDeadLetterHandler
+    this.#notifier = deps.notifier
     this.#emitter = deps.emitter
     this.#buffer = new Array(config.capacity)
   }
@@ -85,15 +90,22 @@ export default class AuditPipeline {
     this.#flushTimer.unref()
   }
 
-  enqueue(event: AuditEvent): boolean {
+  async enqueue(event: AuditEvent): Promise<boolean> {
     if (this.#redactor) {
       event = this.#redactEvent(event)
     }
+    while (this.#size >= this.#config.capacity) {
+      if (this.#config.overflow !== 'block') {
+        if (!this.#handleOverflow(event)) return false
+        break
+      }
 
-    if (this.#size >= this.#config.capacity) {
-      const handled = this.#handleOverflow(event)
-      if (!handled) return false
+      if (!this.#accepting) return false
+      void this.#flush()
+      await this.#waitForCapacity()
     }
+
+    if (!this.#accepting) return false
 
     this.#buffer[this.#tail] = event
     this.#tail = (this.#tail + 1) % this.#config.capacity
@@ -145,14 +157,23 @@ export default class AuditPipeline {
   }
 
   async shutdown(deadlineMs = 5000): Promise<void> {
+    this.#accepting = false
     if (this.#flushTimer) {
       clearInterval(this.#flushTimer)
       this.#flushTimer = null
     }
+    this.#wakeCapacityWaiters()
 
     const deadline = Date.now() + deadlineMs
     while (this.#size > 0 && Date.now() < deadline) {
-      await this.#flush()
+      const active = this.#flush()
+      const remaining = deadline - Date.now()
+      await Promise.race([active, sleep(Math.max(0, remaining))])
+    }
+
+    // Never dead-letter work while a store write may still complete.
+    if (this.#activeFlush) {
+      await this.#activeFlush
     }
 
     if (this.#size > 0) {
@@ -197,14 +218,6 @@ export default class AuditPipeline {
       return true
     }
 
-    if (this.#config.overflow === 'block') {
-      void this.#flush()
-      if (this.#size < this.#config.capacity) return true
-      this.#dropped++
-      this.#emit('audit:dropped', { strategy: 'block', count: 1, event })
-      return false
-    }
-
     return false
   }
 
@@ -214,6 +227,7 @@ export default class AuditPipeline {
     this.#head = (this.#head + 1) % this.#config.capacity
     this.#size--
     this.#dropped++
+    this.#wakeCapacityWaiters()
     return dropped
   }
 
@@ -221,22 +235,41 @@ export default class AuditPipeline {
     return (events) => appendDeadLetters(dlqPath, events)
   }
 
-  async #flush(): Promise<void> {
-    if (this.#flushing || this.#size === 0) return
-    this.#flushing = true
+  #flush(): Promise<void> {
+    if (this.#activeFlush) return this.#activeFlush
+    if (this.#size === 0) return Promise.resolve()
 
-    const batch = this.#drainBuffer()
-    const groups = this.#groupByStore(batch)
-
-    try {
-      for (const group of groups.values()) {
-        await this.#writeWithRetry(group.name, group.store, group.events)
-      }
-    } finally {
-      this.#flushing = false
-    }
+    const active = this.#flushBatch()
+    this.#activeFlush = active
+    void active.then(
+      () => this.#completeFlush(active),
+      () => this.#completeFlush(active)
+    )
+    return active
   }
 
+  async #flushBatch(): Promise<void> {
+    const batch = this.#peekBuffer()
+    const groups = this.#groupByStore(batch)
+
+    for (const group of groups.values()) {
+      const written = await this.#writeWithRetry(group.store, group.events)
+      if (written) {
+        this.#resolveCoupled(group.events.map((event) => event.id))
+      }
+    }
+
+    this.#removeBuffered(batch.length)
+  }
+
+  #completeFlush(active: Promise<void>): void {
+    if (this.#activeFlush !== active) return
+    this.#activeFlush = null
+    this.#wakeCapacityWaiters()
+    if (this.#size >= this.#config.maxBatchSize) {
+      void this.#flush()
+    }
+  }
   #groupByStore(batch: AuditEvent[]): Map<string, PipelineStoreRoute & { events: AuditEvent[] }> {
     const groups = new Map<string, PipelineStoreRoute & { events: AuditEvent[] }>()
 
@@ -254,12 +287,7 @@ export default class AuditPipeline {
     return groups
   }
 
-  async #writeWithRetry(
-    storeName: string,
-    store: AuditStoreContract,
-    batch: AuditEvent[]
-  ): Promise<void> {
-    const eventIds = batch.map((event) => event.id)
+  async #writeWithRetry(store: AuditStoreContract, batch: AuditEvent[]): Promise<boolean> {
     let attempts = 0
     const maxAttempts = 5
     const baseDelay = this.#config.retryBaseDelayMs ?? 100
@@ -270,9 +298,12 @@ export default class AuditPipeline {
         const chained = await store.write(batch)
         this.#written += batch.length
         this.#lastFlushAt = new Date()
-        this.#emit('audit:flushed', { store: storeName, events: chained, count: chained.length })
-        this.#resolveCoupled(eventIds)
-        return
+        try {
+          await this.#notifier.notify(store, chained)
+        } catch {
+          // A store has already accepted the batch; notification cannot trigger a replay.
+        }
+        return true
       } catch (error) {
         lastError = error
         attempts++
@@ -282,28 +313,51 @@ export default class AuditPipeline {
           this.#deadLetterHandler(batch)
           this.#deadLettered += batch.length
           this.#emit('audit:dead_letter', { events: batch, count: batch.length, error: lastError })
-          return
+          return false
         }
 
         const delay = 2 ** attempts * baseDelay + Math.random() * 100
         await sleep(delay)
       }
     }
+
+    return false
   }
 
-  #drainBuffer(): AuditEvent[] {
+  #peekBuffer(): AuditEvent[] {
     const batchSize = Math.min(this.#size, this.#config.maxBatchSize)
     const batch: AuditEvent[] = []
-
     for (let i = 0; i < batchSize; i++) {
-      const event = this.#buffer[this.#head]
+      batch.push(this.#buffer[(this.#head + i) % this.#config.capacity]!)
+    }
+    return batch
+  }
+
+  #removeBuffered(count: number): void {
+    for (let i = 0; i < count; i++) {
       this.#buffer[this.#head] = undefined as unknown as AuditEvent
       this.#head = (this.#head + 1) % this.#config.capacity
       this.#size--
-      batch.push(event)
     }
+    this.#wakeCapacityWaiters()
+  }
 
+  #drainBuffer(): AuditEvent[] {
+    const batch = this.#peekBuffer()
+    this.#removeBuffered(batch.length)
     return batch
+  }
+
+  #waitForCapacity(): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>()
+    this.#capacityWaiters.push(resolve)
+    return promise
+  }
+
+  #wakeCapacityWaiters(): void {
+    const waiters = this.#capacityWaiters
+    this.#capacityWaiters = []
+    for (const wake of waiters) wake()
   }
 
   #emit<Name extends keyof AuditRuntimeEvents>(

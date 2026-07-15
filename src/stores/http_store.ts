@@ -188,6 +188,7 @@ export default class HttpStore implements AuditStoreContract {
 
       if (pruned.length > 0 && policy.archive && !policy.dryRun) {
         await policy.archive({
+          idempotencyKey: `${stream}:${pruned[0]!.seq}:${pruned[pruned.length - 1]!.seq}`,
           event: policy.eventFilter ?? pruned[0]!.event,
           stream,
           fromSeq: pruned[0]!.seq,

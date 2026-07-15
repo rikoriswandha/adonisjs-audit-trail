@@ -11,6 +11,7 @@ import { auditContext } from '../src/audit_context.js'
 import { createRedactor } from '../src/core/redactor.js'
 import { AnchorService } from '../src/core/anchor.js'
 import { createSubjectCrypto } from '../src/core/subject_crypto.js'
+import { RuntimeSuccessfulDeliveryNotifier } from '../src/core/successful_delivery_notifier.js'
 
 function resolveAuditConfig(app: ApplicationService): Promise<ResolvedAuditConfig> {
   const provider = app.config.get('audit')
@@ -34,7 +35,6 @@ export default class AuditProvider {
     this.app.container.singleton('audit.pipeline', async () => {
       const config = await this.app.container.make('audit.config')
       const manager = await this.app.container.make('audit.manager')
-      const redactor = await this.app.container.make('audit.redactor')
       const dlqPath = this.app.makePath('storage/audit-dlq')
       const emitter = await this.app.container.make('emitter')
 
@@ -42,10 +42,17 @@ export default class AuditProvider {
         store: manager.use(),
         storeName: manager.default,
         routeStore: (event) => manager.route(event),
-        redactor,
         deadLetterHandler: AuditPipeline.createFileDeadLetterHandler(dlqPath),
+        notifier: await this.app.container.make('audit.delivery_notifier'),
         emitter,
       })
+    })
+
+    this.app.container.singleton('audit.delivery_notifier', async () => {
+      const config = await this.app.container.make('audit.config')
+      const emitter = await this.app.container.make('emitter')
+      const anchor = config.chain.anchor ? new AnchorService(config.chain.anchor) : undefined
+      return new RuntimeSuccessfulDeliveryNotifier(emitter, anchor)
     })
 
     this.app.container.singleton('audit.redactor', async () => {
@@ -59,8 +66,10 @@ export default class AuditProvider {
     })
 
     this.app.container.singleton('audit.outbox_drainer', async () => {
+      const config = await this.app.container.make('audit.config')
       const manager = await this.app.container.make('audit.manager')
-      return new AuditOutboxDrainer(this.app, manager.use())
+      const notifier = await this.app.container.make('audit.delivery_notifier')
+      return new AuditOutboxDrainer(this.app, manager.use(), config.outbox, notifier)
     })
 
     this.app.container.singleton('audit', async () => {
@@ -73,10 +82,13 @@ export default class AuditProvider {
           payloadMaxBytes: config.payloadMaxBytes,
           streamBy: config.chain.streamBy,
           environment: this.app.getEnvironment(),
+          redactor: await this.app.container.make('audit.redactor'),
           ...(crypto ? { crypto } : {}),
         },
         context: auditContext,
         guarantee: config.guarantee,
+        outbox: config.outbox,
+        emitter: await this.app.container.make('emitter'),
       })
     })
   }
@@ -95,13 +107,6 @@ export default class AuditProvider {
 
     const pipeline = await this.app.container.make('audit.pipeline')
     pipeline.start()
-
-    if (config.chain.anchor) {
-      const anchorService = new AnchorService(config.chain.anchor)
-      emitter.on('audit:flushed', (payload) => {
-        anchorService.onFlush(payload.events).catch(() => {})
-      })
-    }
 
     if (config.guarantee === 'transactional-outbox') {
       this.#outboxDrainer = await this.app.container.make('audit.outbox_drainer')

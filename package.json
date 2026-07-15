@@ -50,6 +50,7 @@
     "postcompile": "npm run copy:templates && npm run copy:commands",
     "build": "npm run compile",
     "verify:exports": "node scripts/verify-exports.mjs",
+    "e2e:consumer": "bash scripts/e2e-configure.sh --all",
     "release": "release-it",
     "version": "npm run build",
     "prepublishOnly": "npm run build"

@@ -72,7 +72,7 @@ export default class AuthListener {
   async #loginSucceeded(payload: unknown): Promise<void> {
     const data = normalizePayload(payload)
     await this.audit
-      .log('auth.login')
+      .log('auth.login', 'auth')
       .by(actorFromUser(data.user))
       .withMeta(metadataFromPayload(data))
       .commit()
@@ -81,7 +81,7 @@ export default class AuthListener {
   async #authenticated(payload: unknown, event: string): Promise<void> {
     const data = normalizePayload(payload)
     await this.audit
-      .log(event)
+      .log(event, 'auth')
       .by(actorFromUser(data.user))
       .withMeta(metadataFromPayload(data))
       .commit()
@@ -90,7 +90,7 @@ export default class AuthListener {
   async #loggedOut(payload: unknown): Promise<void> {
     const data = normalizePayload(payload)
     await this.audit
-      .log('auth.logout')
+      .log('auth.logout', 'auth')
       .by(
         data.user === undefined || data.user === null
           ? { type: 'user', id: null }
@@ -105,7 +105,7 @@ export default class AuthListener {
     const attempted =
       data.ctx?.request?.input?.('email') ?? data.ctx?.request?.input?.('uid') ?? null
     await this.audit
-      .log(event)
+      .log(event, 'auth')
       .withMeta({
         ...metadataFromPayload(data),
         attemptedIdentifier: attempted,

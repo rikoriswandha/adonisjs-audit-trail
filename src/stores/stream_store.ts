@@ -68,6 +68,7 @@ export default class StreamStore implements AuditStoreContract {
   readonly #sidecarPath?: string
   #fileStream?: import('node:fs').WriteStream
   #fileStreamError?: Error
+  #writeTail: Promise<void> = Promise.resolve()
 
   constructor(options: StreamStoreOptions = {}) {
     this.#destination = resolveDestination(options.destination)
@@ -81,15 +82,25 @@ export default class StreamStore implements AuditStoreContract {
   }
 
   async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
+    const pending = this.#writeTail.then(() => this.#writeBatch(batch))
+    this.#writeTail = pending.then(
+      () => undefined,
+      () => undefined
+    )
+    return pending
+  }
+
+  async #writeBatch(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
     if (batch.length === 0) return []
 
     const grouped = this.#groupByStream(batch)
     const allChained: ChainedAuditEvent[] = []
+    const nextHeads = new Map<string, HeadState>()
 
     for (const [stream, events] of grouped) {
-      const head = await this.head(stream)
+      const head = this.#heads.get(stream) ?? null
       const chained = chainBatch(events, head)
-      this.#heads.set(stream, {
+      nextHeads.set(stream, {
         seq: chained[chained.length - 1]!.seq,
         hash: chained[chained.length - 1]!.hash,
       })
@@ -97,6 +108,10 @@ export default class StreamStore implements AuditStoreContract {
     }
 
     await this.#writeEvents(allChained)
+
+    for (const [stream, head] of nextHeads) {
+      this.#heads.set(stream, head)
+    }
     this.#persistHeads()
 
     return allChained

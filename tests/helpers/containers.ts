@@ -1,6 +1,7 @@
 import { GenericContainer, type StartedTestContainer } from 'testcontainers'
+import { isDialectEnabled, type DbDialect } from './dialect.js'
 
-export type DbDialect = 'sqlite' | 'postgres' | 'mysql'
+export type { DbDialect } from './dialect.js'
 
 export interface DbConnectionConfig {
   client: string
@@ -14,8 +15,11 @@ export interface ContainerHandle {
   stop(): Promise<void>
 }
 
-function skipDocker(): boolean {
-  return process.env.SKIP_DOCKER_TESTS === '1'
+function externalContainerFailure(dialect: Exclude<DbDialect, 'sqlite'>, error: unknown): Error {
+  return new Error(
+    `Could not start the ${dialect} test container. Verify Docker is running, or disable external dialect tests by omitting RUN_DOCKER_TESTS=1.`,
+    { cause: error }
+  )
 }
 
 export async function startContainer(dialect: DbDialect): Promise<ContainerHandle | null> {
@@ -31,15 +35,19 @@ export async function startContainer(dialect: DbDialect): Promise<ContainerHandl
     }
   }
 
-  if (skipDocker()) {
+  if (!isDialectEnabled(dialect)) {
     return null
   }
 
-  if (dialect === 'postgres') {
-    return startPostgres()
-  }
+  try {
+    if (dialect === 'postgres') {
+      return await startPostgres()
+    }
 
-  return startMysql()
+    return await startMysql()
+  } catch (error) {
+    throw externalContainerFailure(dialect, error)
+  }
 }
 
 async function startPostgres(): Promise<ContainerHandle> {

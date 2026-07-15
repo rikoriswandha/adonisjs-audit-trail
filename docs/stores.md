@@ -12,7 +12,6 @@ Stores audits in a SQL table via `@adonisjs/lucid`. Supports SQLite, PostgreSQL,
 stores.lucid({
   connection: 'audit',
   table: 'audits',
-  enforceImmutability: true,
 })
 ```
 
@@ -39,8 +38,10 @@ POSTs canonical batches to a collector.
 ```ts
 stores.http({
   url: 'https://siem.example.com/audits',
-  secret: process.env.AUDIT_COLLECTOR_SECRET,
-  idempotencyKey: (batch) => batch[0].id,
+  signature: {
+    secretEnvVar: 'AUDIT_COLLECTOR_SECRET',
+  },
+  maxRetainedPerStream: 100_000,
 })
 ```
 
@@ -80,18 +81,31 @@ await audit.log('invoice.approved').to('siem').commit()
 
 ## Custom store
 
-Implement `AuditStoreContract`:
+Provide an `AuditStoreFactory` in `defineConfig`:
 
 ```ts
-export const myStore = stores.define({
-  async write(batch) {
-    // persist, chain, return ChainedAuditEvent[]
-  },
-  async head(stream) {
-    // return { seq, hash } | null
-  },
-  async* verify(stream, range) {
-    // yield VerifyReport
-  },
-})
+import type {
+  AuditEvent,
+  AuditStoreContract,
+  ChainedAuditEvent,
+  PruneReport,
+  ResolvedRetentionPolicy,
+  VerifyReport,
+} from '@rikology/adonisjs-audit-trail'
+import type { ApplicationService } from '@adonisjs/core/types'
+
+export async function myStore(_app: ApplicationService): Promise<AuditStoreContract> {
+  return {
+    async write(_batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
+      return []
+    },
+    async head(_stream: string) {
+      return null
+    },
+    async *verify(_stream: string): AsyncIterable<VerifyReport> {},
+    async prune(_policy: ResolvedRetentionPolicy): Promise<PruneReport> {
+      return { streams: [], totalPruned: 0, perEvent: {} }
+    },
+  }
+}
 ```

@@ -51,7 +51,9 @@ For collectors that accept batches:
 ```ts
 siem: stores.http({
   url: process.env.AUDIT_SIEM_URL!,
-  secret: process.env.AUDIT_SIEM_SECRET!,
+  signature: {
+    secretEnvVar: 'AUDIT_SIEM_SECRET',
+  },
 })
 ```
 

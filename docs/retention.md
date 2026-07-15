@@ -19,6 +19,16 @@ retention: {
 
 Policies accept any interval string understood by the underlying duration parser (e.g. `30 days`, `6 months`, `2 years`).
 
+Physical pruning from the Lucid store is deliberately privileged. Configure a maintenance callback that establishes the database permission inside the pruning transaction:
+
+```ts
+stores.lucid({
+  maintenance: async (transaction) => {
+    await transaction.rawQuery("select set_config('audit.maintenance', 'prune', true)")
+  },
+})
+```
+
 ## Prune command
 
 ```bash
@@ -34,11 +44,11 @@ node ace audit:prune --connection=audit_maintainer
 
 The command:
 
-1. Resolves the retention cutoff per event type.
-2. Groups candidate rows into segments.
-3. Calls `archive(segment)` for each segment (if configured).
-4. Deletes rows oldest-first.
-5. Never deletes the per-stream head row, preserving chain continuity.
+1. Resolves the retention cutoff for the contiguous expired prefix of each stream.
+2. Groups that prefix into a segment, retaining the stream head.
+3. Calls `archive(segment)` before deletion (if configured).
+4. Executes the configured privileged maintenance operation, then deletes the archived range.
+5. Records a checkpoint so verification can continue across the pruned range.
 
 ## Archive-before-delete
 
@@ -46,13 +56,14 @@ For compliance, archive segments to WORM/object-lock storage before deletion. Th
 
 ```ts
 interface RetentionSegment {
+  idempotencyKey: string // `${stream}:${fromSeq}:${toSeq}`
   stream: string
   event: string
   fromSeq: number
   toSeq: number
-  from: Date
-  to: Date
-  rows: ChainedAuditEvent[]
+  count: number
+  fromCreatedAt: string
+  toCreatedAt: string
 }
 ```
 

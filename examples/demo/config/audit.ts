@@ -20,7 +20,6 @@ export default defineConfig({
   stores: {
     lucid: stores.lucid({
       table: 'audits',
-      enforceImmutability: true,
       // connection: 'audit', // Optional: use a dedicated audit DB connection.
     }),
   },
@@ -50,7 +49,6 @@ export default defineConfig({
    * Hash-chain configuration.
    */
   chain: {
-    enabled: true,
     streamBy: 'global',
   },
 

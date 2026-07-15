@@ -70,7 +70,12 @@
         {
           "name": "limit",
           "type": "number",
-          "description": "Maximum events to replay"
+          "description": "Maximum events to requeue and replay"
+        },
+        {
+          "name": "requeue",
+          "type": "boolean",
+          "description": "Return failed rows to pending before replaying"
         }
       ],
       "args": [],

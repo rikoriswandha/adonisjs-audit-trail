@@ -325,7 +325,7 @@ export default defineConfig({
   default: 'lucid',
   guarantee: 'best-effort',
   stores: {
-    lucid: stores.lucid({ connection: 'audit', table: 'audits', enforceImmutability: true }),
+    lucid: stores.lucid({ connection: 'audit', table: 'audits' }),
     siem: stores.stream({ destination: 'stdout', format: 'ndjson' }),
     all: stores.fanout({ primary: 'lucid', mirrors: ['siem'], mirrorFailure: 'log' }),
   },
@@ -338,16 +338,16 @@ export default defineConfig({
     perEvent: { 'auth.login': '90 days' },
     archive: async (segment) => { /* push NDJSON to object storage w/ object lock */ },
   },
-  chain: { enabled: true, streamBy: 'tenant' },   // 'tenant' | 'global' | (event) => string
+  chain: { streamBy: 'tenant' },   // 'tenant' | 'global' | (event) => string
   queue: { maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' },
 })
 ```
 
-`StoreContract`: `write(batch, chainCtx)`, `head(stream)`, `verify(stream, range)`, `prune(policy)`, optional `query(...)`. The `http` store signs batches (HMAC) and supports the collector returning the new chain head, enabling chained external sinks.
+`AuditStoreContract`: `write(batch)`, `head(stream, options?)`, `verify(stream, range?, options?)`, `prune(policy)`, and optional `query(filters, options?)`. Read options accept a named connection or caller-owned Lucid client. The HTTP store signs batches (HMAC) and supports the collector returning the new chain head, enabling chained external sinks.
 
 ### 6.7 Read side
 
-- **`Audit` Lucid model**: read-only (throws on `save`/`delete`), pre-scoped query helpers: `Audit.forModel(invoice)`, `.byActor(user)`, `.inTenant(id)`, `.between(a, b)`, cursor pagination on `seq`.
+- **`Audit` Lucid model**: read-only (throws on `save`/`delete`), pre-scoped query helpers applied through `Audit.query().apply(...)`: `forModel(invoice)`, `byActor({ type: 'user', id })`, `inTenant(id)`, and `between(a, b)`. Store queries use exclusive `seq` cursors.
 - **Mixin accessors**: `invoice.audits()` relation-like query, `invoice.lastAudit()`.
 - **`AuditTransformer`** (v7 `BaseTransformer`) shipped as a stub so apps get typed serialization to Inertia/React or JSON APIs out of the box, with `actor_label` and a humanized diff shape.
 
@@ -447,5 +447,7 @@ async destroy({ params, response }: HttpContext) {
 }
 
 // later
-const trail = await Audit.forModel(doc).orderBy('seq', 'desc').cursorPaginate(20)
+const trail = await Audit.query()
+  .apply((scopes) => scopes.forModel(doc))
+  .orderBy('seq', 'desc')
 ```

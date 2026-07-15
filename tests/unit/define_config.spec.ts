@@ -83,7 +83,7 @@ test.group('defineConfig', function (group) {
       saltEnvVar: 'AUDIT_REDACTION_SALT',
     })
     assert.deepEqual(resolved.retention, { default: '730 days' })
-    assert.deepEqual(resolved.chain, { enabled: true, streamBy: 'global' })
+    assert.deepEqual(resolved.chain, { streamBy: 'global' })
     assert.deepEqual(resolved.queue, {
       maxBatchSize: 200,
       flushIntervalMs: 250,

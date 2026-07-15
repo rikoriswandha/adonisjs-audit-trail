@@ -1,4 +1,5 @@
 import { test } from '@japa/runner'
+import { createHash } from 'node:crypto'
 import { assembleEvent } from '../../src/core/assembler.js'
 import type { AuditContextStore } from '../../src/audit_context.js'
 import type { AuditEvent } from '../../src/types.js'
@@ -173,5 +174,77 @@ test.group('assembleEvent', () => {
     assert.equal(captured!.auditableType, 'Order')
     assert.equal(captured!.auditableId, '99')
     assert.equal(captured!.tenantId, 'acme')
+  })
+  test('strips query strings from captured URLs', async ({ assert }) => {
+    const event = await assembleEvent(
+      { event: 'post.read' },
+      { url: '/posts/1?access_token=secret' },
+      { payloadMaxBytes: 32_768, streamBy: 'global' }
+    )
+
+    assert.equal(event.url, '/posts/1')
+  })
+
+  test('rejects a missing or malformed tenant in tenant stream mode', async ({ assert }) => {
+    await assert.rejects(
+      () => assembleEvent({ event: 'x' }, {}, { payloadMaxBytes: 32_768, streamBy: 'tenant' }),
+      /requires a tenant ID/
+    )
+    await assert.rejects(
+      () =>
+        assembleEvent(
+          { event: 'x' },
+          { tenantId: ' acme ' },
+          { payloadMaxBytes: 32_768, streamBy: 'tenant' }
+        ),
+      /non-empty, trimmed strings/
+    )
+  })
+
+  test('redacts and encrypts every payload before enforcing payload size', async ({ assert }) => {
+    const encryptedValue = 'ciphertext'.repeat(20)
+    const observedPayloads: AuditEvent[] = []
+    const event = await assembleEvent(
+      {
+        event: 'private.changed',
+        oldValues: { secret: 'old-secret' },
+        newValues: { secret: 'new-secret' },
+        metadata: { secret: 'metadata-secret' },
+      },
+      {},
+      {
+        payloadMaxBytes: 10,
+        streamBy: 'global',
+        redactor: {
+          redact(values) {
+            return { ...values, secret: '[REDACTED]' }
+          },
+        },
+        crypto: {
+          async encrypt(candidate) {
+            observedPayloads.push(candidate)
+            return {
+              ...candidate,
+              oldValues: { secret: encryptedValue },
+              newValues: { secret: encryptedValue },
+              metadata: { secret: encryptedValue },
+            }
+          },
+        },
+      }
+    )
+
+    assert.lengthOf(observedPayloads, 1)
+    assert.deepEqual(observedPayloads[0].oldValues, { secret: '[REDACTED]' })
+    assert.deepEqual(observedPayloads[0].newValues, { secret: '[REDACTED]' })
+    assert.deepEqual(observedPayloads[0].metadata, { secret: '[REDACTED]' })
+
+    const expectedDigest = createHash('sha256')
+      .update(JSON.stringify({ secret: encryptedValue }))
+      .digest('hex')
+    for (const payload of [event.oldValues, event.newValues, event.metadata]) {
+      assert.isTrue((payload as Record<string, unknown>)._truncated)
+      assert.equal((payload as Record<string, unknown>)._sha256, expectedDigest)
+    }
   })
 })

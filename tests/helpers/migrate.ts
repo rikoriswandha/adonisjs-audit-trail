@@ -40,17 +40,51 @@ export async function runMigrations(app: ApplicationService): Promise<void> {
     })
   }
 
+  if (!(await client.schema.hasTable('audit_archive_events'))) {
+    await client.schema.createTable('audit_archive_events', (table) => {
+      table.string('id').primary()
+      table.string('stream').notNullable()
+      table.bigInteger('seq').notNullable()
+      table.string('hash', 64).notNullable()
+      table.string('prev_hash', 64).notNullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.unique(['stream', 'seq'])
+    })
+  }
+
+  if (!(await client.schema.hasTable('audit_chain_checkpoints'))) {
+    await client.schema.createTable('audit_chain_checkpoints', (table) => {
+      table.string('stream').notNullable()
+      table.bigInteger('seq').notNullable()
+      table.string('hash', 64).notNullable()
+      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.primary(['stream', 'seq'])
+    })
+  }
+
+  if (!(await client.schema.hasTable('audit_maintenance_guard'))) {
+    await client.schema.createTable('audit_maintenance_guard', (table) => {
+      table.string('operation').primary()
+    })
+  }
+
   if (!(await client.schema.hasTable('audit_outbox'))) {
     await client.schema.createTable('audit_outbox', (table) => {
-      table.increments('id')
+      table.uuid('id').primary()
       table.json('payload').notNullable()
+      table.string('tenant_id').nullable()
+      table.string('status').notNullable().defaultTo('pending')
       table.integer('attempts').unsigned().notNullable().defaultTo(0)
+      table.timestamp('available_at', { useTz: true, precision: 3 }).notNullable()
       table.timestamp('claimed_at', { useTz: true, precision: 3 }).nullable()
       table.timestamp('processed_at', { useTz: true, precision: 3 }).nullable()
+      table.timestamp('failed_at', { useTz: true, precision: 3 }).nullable()
+      table.text('last_error').nullable()
       table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
       table.timestamp('updated_at', { useTz: true, precision: 3 }).nullable()
 
-      table.index(['processed_at', 'claimed_at'])
+      table.index(['status', 'available_at'])
+      table.index(['status', 'tenant_id', 'available_at'])
     })
   }
 

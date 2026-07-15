@@ -222,7 +222,7 @@ export const stores = {
 }
 ```
 
-Defaults: `default: 'lucid'`, `guarantee: 'best-effort'`, `chain: { enabled: true, streamBy: 'global' }`, `queue: { maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' }`, `payloadMaxBytes: 32_768`.
+Defaults: `default: 'lucid'`, `guarantee: 'best-effort'`, `chain: { streamBy: 'global' }`, `queue: { maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' }`, `payloadMaxBytes: 32_768`.
 
 ### T1.3 `src/core/canonical_json.ts`
 
@@ -334,7 +334,7 @@ Single class, container singleton:
 
 ### T2.6 `src/models/audit.ts` (read-only Lucid model)
 
-`save/delete/$getQueryFor(update|delete)` throw `E_AUDIT_IMMUTABLE`. Static scopes: `forModel(model)`, `forRef(type, id)`, `byActor(actor)`, `inTenant(id)`, `between(a, b)`, `event(name)`; `cursorPaginate` on `seq`.
+`save/delete/$getQueryFor(update|delete)` throw `E_AUDIT_IMMUTABLE`. Query scopes are applied with `Audit.query().apply(...)`: `forModel(model)`, `forRef(type, id)`, `byActor(actor)`, `inTenant(id)`, `between(a, b)`, and `event(name)`. Store `AuditQueryFilters.cursor` is an exclusive `seq` cursor.
 
 ### T2.7 `providers/audit_provider.ts`
 
@@ -390,7 +390,7 @@ export function Auditable<T extends NormalizeConstructor<typeof BaseModel>>(supe
       this.after('update', (m) => captureModelEvent('updated', m))
       this.after('delete', (m) => captureModelEvent('deleted', m))
     }
-    audits() { return Audit.forModel(this) }
+    audits() { return Audit.query().apply((scopes) => scopes.forModel(this)) }
     async lastAudit() { ... }
   }
   return AuditableModel

@@ -98,7 +98,9 @@ await audit.log('invoice.approved').on(invoice).withMeta({ level: 2 }).commit()
 ```ts
 import Audit from '@rikology/adonisjs-audit-trail/models/audit'
 
-const trail = await Audit.forModel(invoice).orderBy('seq', 'desc').cursorPaginate(20)
+const trail = await Audit.query()
+  .apply((scopes) => scopes.forModel(invoice))
+  .orderBy('seq', 'desc')
 ```
 
 ### 6. Verify integrity

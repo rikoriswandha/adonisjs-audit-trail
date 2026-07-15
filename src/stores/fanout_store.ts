@@ -53,19 +53,26 @@ export default class FanoutStore implements AuditStoreContract {
 
   async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
     const primary = this.#requirePrimary()
-    const chained = await primary.write(batch)
-
     const mirrors = this.#mirrors ?? []
+
+    if (this.#mirrorFailure === 'throw') {
+      try {
+        await Promise.all(mirrors.map((mirror) => mirror.write(batch)))
+      } catch (error) {
+        throw new AuditStoreError(
+          `Fanout mirror failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+      }
+
+      return primary.write(batch)
+    }
+
+    const chained = await primary.write(batch)
     await Promise.all(
       mirrors.map(async (mirror) => {
         try {
           await mirror.write(batch)
         } catch (error) {
-          if (this.#mirrorFailure === 'throw') {
-            throw new AuditStoreError(
-              `Fanout mirror failed: ${error instanceof Error ? error.message : String(error)}`
-            )
-          }
           console.error(
             `Audit fanout mirror failed: ${error instanceof Error ? error.message : String(error)}`
           )

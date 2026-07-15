@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import type { AuditActor, AuditEvent } from '../types.js'
 import type { AuditContextStore } from '../audit_context.js'
+import { AuditConfigurationError } from './errors.js'
 import { uuidv7 } from './uuidv7.js'
 
 export interface AssembleInput {
@@ -12,6 +14,7 @@ export interface AssembleInput {
   metadata?: Record<string, unknown> | null
   tags?: string[]
   actor?: AuditActor | null
+  transaction?: TransactionClientContract
 }
 
 export interface AssembleConfig {
@@ -19,30 +22,50 @@ export interface AssembleConfig {
   streamBy: 'global' | 'tenant' | ((event: AuditEvent) => string)
   tenantId?: string | null
   environment?: string
-  crypto?: { encrypt: (event: AuditEvent) => Promise<AuditEvent> }
+  crypto?: {
+    encrypt: (event: AuditEvent, client?: TransactionClientContract) => Promise<AuditEvent>
+  }
+  redactor?: { redact: (values: Record<string, unknown>) => Record<string, unknown> }
 }
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex')
 }
 
+function resolveTenantId(context: AuditContextStore, config: AssembleConfig): string | null {
+  const tenantId = context.tenantId ?? config.tenantId ?? null
+
+  if (tenantId === null) {
+    return null
+  }
+
+  if (typeof tenantId !== 'string' || tenantId.length === 0 || tenantId.trim() !== tenantId) {
+    throw new AuditConfigurationError('Audit tenant IDs must be non-empty, trimmed strings')
+  }
+
+  return tenantId
+}
+
 function resolveStream(
   input: AssembleInput,
-  context: AuditContextStore,
-  config: AssembleConfig
+  config: AssembleConfig,
+  tenantId: string | null
 ): string {
   if (config.streamBy === 'global') {
     return 'default'
   }
 
   if (config.streamBy === 'tenant') {
-    return context.tenantId ?? config.tenantId ?? 'default'
+    if (tenantId === null) {
+      throw new AuditConfigurationError('Tenant stream mode requires a tenant ID')
+    }
+    return tenantId
   }
 
   const partialEvent = {
     event: input.event,
     auditableType: input.auditableType ?? null,
     auditableId: input.auditableId ?? null,
-    tenantId: context.tenantId ?? config.tenantId ?? null,
+    tenantId,
     actor: { type: 'system', id: null } as AuditActor,
     oldValues: input.oldValues ?? null,
     newValues: input.newValues ?? null,
@@ -83,42 +106,58 @@ function maybeTruncate(
     _sha256: sha256(serialized),
   }
 }
+
+function truncatePayloads(event: AuditEvent, payloadMaxBytes: number): AuditEvent {
+  return {
+    ...event,
+    oldValues: maybeTruncate(event.oldValues, payloadMaxBytes),
+    newValues: maybeTruncate(event.newValues, payloadMaxBytes),
+    metadata: maybeTruncate(event.metadata, payloadMaxBytes),
+  }
+}
+
 export async function assembleEvent(
   input: AssembleInput,
   context: AuditContextStore,
   config: AssembleConfig
 ): Promise<AuditEvent> {
   const actor = input.actor ?? (await resolveActor(context, config.environment))
-  const tenantId = context.tenantId ?? config.tenantId ?? null
-  const oldValues = maybeTruncate(input.oldValues ?? null, config.payloadMaxBytes)
-  const newValues = maybeTruncate(input.newValues ?? null, config.payloadMaxBytes)
-  const metadata = maybeTruncate(input.metadata ?? null, config.payloadMaxBytes)
+  const tenantId = resolveTenantId(context, config)
 
   let event: AuditEvent = {
     id: uuidv7(),
     event: input.event,
-    stream: resolveStream(input, context, config),
+    stream: resolveStream(input, config, tenantId),
     auditableType: input.auditableType ?? null,
     auditableId: input.auditableId ?? null,
-    oldValues,
-    newValues,
-    metadata,
+    oldValues: input.oldValues ?? null,
+    newValues: input.newValues ?? null,
+    metadata: input.metadata ?? null,
     actor,
     tenantId,
     requestId: context.requestId ?? null,
     correlationId: context.correlationId ?? null,
     ipAddress: context.ip ?? null,
     userAgent: context.userAgent ?? null,
-    url: context.url ?? null,
+    url: context.url?.replace(/\?.*$/, '') ?? null,
     httpMethod: context.httpMethod ?? null,
     tags: input.tags ?? [],
     schemaVersion: '1',
     createdAt: new Date().toISOString(),
   }
 
-  if (config.crypto) {
-    event = await config.crypto.encrypt(event)
+  if (config.redactor) {
+    event = {
+      ...event,
+      oldValues: event.oldValues ? config.redactor.redact(event.oldValues) : event.oldValues,
+      newValues: event.newValues ? config.redactor.redact(event.newValues) : event.newValues,
+      metadata: event.metadata ? config.redactor.redact(event.metadata) : event.metadata,
+    }
   }
 
-  return event
+  if (config.crypto) {
+    event = await config.crypto.encrypt(event, input.transaction)
+  }
+
+  return truncatePayloads(event, config.payloadMaxBytes)
 }

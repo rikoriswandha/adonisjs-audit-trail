@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { RedactionMode } from '../types.js'
+import { canonicalJson } from './canonical_json.js'
 import { AuditRedactionSaltError } from './errors.js'
 
 export interface RedactorConfig {
@@ -51,7 +52,7 @@ function isRedacted(path: string[], patterns: CompiledPattern[]): boolean {
 }
 
 function hashValue(value: unknown, salt: string): string {
-  const input = typeof value === 'string' ? value : String(value)
+  const input = value !== null && typeof value === 'object' ? canonicalJson(value) : String(value)
   return `sha256:${createHash('sha256')
     .update(salt + input)
     .digest('hex')}`

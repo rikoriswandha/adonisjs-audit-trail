@@ -1,12 +1,14 @@
 import { configProvider } from '@adonisjs/core'
 import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
 import type { HttpContext } from '@adonisjs/core/http'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import type { Writable } from 'node:stream'
 import { AuditConfigurationError, AuditPeerDependencyError } from './core/errors.js'
 import type {
   AnchorConfig,
   AuditConfig,
   AuditEvent,
+  AuditOutboxConfig,
   AuditStoreContract,
   AuditStoreFactory,
   CryptoShreddingConfig,
@@ -36,7 +38,6 @@ export type ResolvedAuditConfig<
   }
   retention: ResolvedRetentionPolicy
   chain: {
-    enabled: boolean
     streamBy: 'global' | 'tenant' | ((event: AuditEvent) => string)
     anchor?: AnchorConfig
   }
@@ -47,6 +48,10 @@ export type ResolvedAuditConfig<
     capacity: number
     overflow: OverflowStrategy
   }
+  outbox: Required<
+    Pick<AuditOutboxConfig, 'table' | 'maxAttempts' | 'retryDelayMs' | 'staleClaimMs'>
+  > &
+    Pick<AuditOutboxConfig, 'connection' | 'executor'>
   payloadMaxBytes: number
   tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
   captureAuthEvents: boolean
@@ -116,7 +121,6 @@ export function defineConfig<
         ...(config.retention?.archive !== undefined ? { archive: config.retention.archive } : {}),
       },
       chain: {
-        enabled: config.chain?.enabled ?? true,
         streamBy: config.chain?.streamBy ?? 'global',
         ...(config.chain?.anchor !== undefined ? { anchor: config.chain.anchor } : {}),
       },
@@ -128,6 +132,16 @@ export function defineConfig<
         overflow: config.queue?.overflow ?? 'dropOldest',
       },
       payloadMaxBytes: config.payloadMaxBytes ?? 32_768,
+      outbox: {
+        table: config.outbox?.table ?? 'audit_outbox',
+        maxAttempts: config.outbox?.maxAttempts ?? 5,
+        retryDelayMs: config.outbox?.retryDelayMs ?? 0,
+        staleClaimMs: config.outbox?.staleClaimMs ?? 5 * 60 * 1000,
+        ...(config.outbox?.connection !== undefined
+          ? { connection: config.outbox.connection }
+          : {}),
+        ...(config.outbox?.executor !== undefined ? { executor: config.outbox.executor } : {}),
+      },
       tenantResolver: config.tenantResolver,
       captureAuthEvents: config.captureAuthEvents ?? true,
     }
@@ -163,7 +177,10 @@ function bindFanoutStore(
 export interface LucidStoreOptions {
   connection?: string
   table?: string
-  enforceImmutability?: boolean
+  /**
+   * Runs inside a pruning transaction to authorize the privileged maintenance operation.
+   */
+  maintenance?: (transaction: TransactionClientContract) => Promise<void>
 }
 
 export interface StreamStoreOptions {
@@ -179,6 +196,11 @@ export interface HttpStoreOptions {
     header?: string
     algorithm?: 'sha256'
   }
+  /**
+   * Number of successful events retained per stream for local verification.
+   * Use `0` for unbounded retention.
+   */
+  maxRetainedPerStream?: number
   idempotencyHeader?: string
 }
 

@@ -39,21 +39,28 @@ static auditConfig = {
 
 For GDPR right-to-erasure, sensitive values can be encrypted with a per-subject key. Erasure deletes the key; the ciphertext remains in the audit table, so the hash chain stays valid.
 
-```ts
-import audit from '@rikology/adonisjs-audit-trail/services/main'
-
-await audit.forgetSubject('user-123')
+```bash
+node ace audit:forget --subject=user-123
 ```
 
 Configure a `SubjectKeyStore` in `config/audit.ts`:
 
 ```ts
-cryptoShredding: {
-  enabled: true,
-  fields: ['old_values.email', 'new_values.email'],
-  keyStore: stores.subjectKeyStore.lucid(),
-}
+import { defineConfig, MemorySubjectKeyStore, stores } from '@rikology/adonisjs-audit-trail'
+
+const keyStore = new MemorySubjectKeyStore()
+
+export default defineConfig({
+  stores: { lucid: stores.lucid() },
+  cryptoShredding: {
+    enabled: true,
+    fields: ['old_values.email', 'new_values.email'],
+    keyStore,
+  },
+})
 ```
+
+`MemorySubjectKeyStore` is useful for development and tests. Production deployments must provide a durable `SubjectKeyStore` implementation (or construct `LucidSubjectKeyStore` with the application service).
 
 Use `node ace audit:forget --subject=<id>` to delete a subject key.
 

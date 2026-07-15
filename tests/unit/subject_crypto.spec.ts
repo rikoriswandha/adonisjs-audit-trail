@@ -1,6 +1,8 @@
 import { test } from '@japa/runner'
 import { SubjectCrypto, MemorySubjectKeyStore } from '../../src/core/subject_crypto.js'
+import { canonicalJson } from '../../src/core/canonical_json.js'
 import type { AuditEvent } from '../../src/types.js'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 
 function baseEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
   return {
@@ -25,6 +27,10 @@ function baseEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
     createdAt: new Date().toISOString(),
     ...overrides,
   }
+}
+
+function defaultSubjectId(event: AuditEvent): string {
+  return canonicalJson(['audit-subject', event.tenantId, event.actor.type, event.actor.id])
 }
 
 test.group('SubjectCrypto', () => {
@@ -62,7 +68,7 @@ test.group('SubjectCrypto', () => {
     const crypto = new SubjectCrypto({ fields: ['email'], keyStore })
 
     const encrypted = await crypto.encrypt(baseEvent())
-    await keyStore.delete('user-1')
+    await keyStore.delete(defaultSubjectId(baseEvent()))
     const decrypted = await crypto.decrypt(encrypted)
 
     const email = (decrypted.newValues as Record<string, unknown>).email
@@ -77,11 +83,67 @@ test.group('SubjectCrypto', () => {
     const encrypted = await crypto.encrypt(baseEvent())
     const ciphertextBefore = JSON.stringify((encrypted.newValues as Record<string, unknown>).email)
 
-    await keyStore.delete('user-1')
+    await keyStore.delete(defaultSubjectId(baseEvent()))
 
     assert.equal(
       JSON.stringify((encrypted.newValues as Record<string, unknown>).email),
       ciphertextBefore
     )
+  })
+  test('creates one consistent key for concurrent encryption', async ({ assert }) => {
+    const keyStore = new MemorySubjectKeyStore()
+    const crypto = new SubjectCrypto({ fields: ['email'], keyStore })
+    const events = await Promise.all(Array.from({ length: 20 }, () => crypto.encrypt(baseEvent())))
+
+    for (const event of events) {
+      const decrypted = await crypto.decrypt(event)
+      assert.equal((decrypted.newValues as Record<string, unknown>).email, 'ada@example.com')
+    }
+  })
+
+  test('uses tenant-scoped default subject identities', async ({ assert }) => {
+    const keyStore = new MemorySubjectKeyStore()
+    const crypto = new SubjectCrypto({ fields: ['email'], keyStore })
+    const tenantA = baseEvent({ tenantId: 'tenant-a' })
+    const tenantB = baseEvent({ tenantId: 'tenant-b' })
+    const encryptedA = await crypto.encrypt(tenantA)
+    const encryptedB = await crypto.encrypt(tenantB)
+
+    await keyStore.delete(defaultSubjectId(tenantA))
+
+    const forgottenA = await crypto.decrypt(encryptedA)
+    const restoredB = await crypto.decrypt(encryptedB)
+    assert.equal(
+      (forgottenA.newValues as Record<string, Record<string, unknown>>).email._forgotten,
+      true
+    )
+    assert.equal((restoredB.newValues as Record<string, unknown>).email, 'ada@example.com')
+  })
+  test('binds subject key creation to the caller transaction', async ({ assert }) => {
+    const keys = new Map<string, string>()
+    const clients: unknown[] = []
+    const keyStore = {
+      async get(subjectId: string, client?: TransactionClientContract) {
+        clients.push(client)
+        return keys.get(subjectId) ?? null
+      },
+      async set(subjectId: string, key: string, client?: TransactionClientContract) {
+        clients.push(client)
+        if (!keys.has(subjectId)) {
+          keys.set(subjectId, key)
+        }
+      },
+      async delete(subjectId: string, client?: TransactionClientContract) {
+        clients.push(client)
+        keys.delete(subjectId)
+      },
+    }
+    const transaction = {} as TransactionClientContract
+    const crypto = new SubjectCrypto({ fields: ['email'], keyStore })
+
+    await crypto.encrypt(baseEvent(), transaction)
+
+    assert.isAbove(clients.length, 1)
+    assert.isTrue(clients.every((client) => client === transaction))
   })
 })

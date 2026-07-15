@@ -7,6 +7,7 @@ import AuditPipeline, {
   type PipelineEmitter,
   type PipelineStoreRoute,
 } from '../../src/core/pipeline.js'
+import type { SuccessfulDeliveryNotifier } from '../../src/core/successful_delivery_notifier.js'
 import type { AuditEvent, AuditStoreContract, OverflowStrategy } from '../../src/types.js'
 
 interface FakeStore extends AuditStoreContract {
@@ -84,6 +85,7 @@ function createPipeline(
     deadLetterHandler?: (events: AuditEvent[]) => void
     routeStore?: (event: AuditEvent) => PipelineStoreRoute
     emitter?: PipelineEmitter
+    notifier?: SuccessfulDeliveryNotifier
   } = {}
 ) {
   return new AuditPipeline(
@@ -96,6 +98,7 @@ function createPipeline(
     },
     {
       store,
+      notifier: overrides.notifier ?? { async notify() {} },
       deadLetterHandler: overrides.deadLetterHandler,
       routeStore: overrides.routeStore,
       emitter: overrides.emitter,
@@ -173,8 +176,8 @@ test.group('AuditPipeline', () => {
     const { store, writes } = createFakeStore()
     const pipeline = createPipeline(store, { capacity: 1, overflow: 'dropNew' })
 
-    assert.isTrue(pipeline.enqueue(event('a')))
-    assert.isFalse(pipeline.enqueue(event('b')))
+    assert.isTrue(await pipeline.enqueue(event('a')))
+    assert.isFalse(await pipeline.enqueue(event('b')))
     await pipeline.shutdown()
     assert.equal(writes.length, 1)
     assert.equal(writes[0].length, 1)
@@ -186,8 +189,8 @@ test.group('AuditPipeline', () => {
     const pipeline = createPipeline(store, { capacity: 1, overflow: 'block' })
     const startedAt = Date.now()
 
-    assert.isTrue(pipeline.enqueue(event('a')))
-    assert.isTrue(pipeline.enqueue(event('b')))
+    assert.isTrue(await pipeline.enqueue(event('a')))
+    assert.isTrue(await pipeline.enqueue(event('b')))
     await pipeline.shutdown()
 
     assert.isBelow(Date.now() - startedAt, 100)
@@ -284,6 +287,7 @@ test.group('AuditPipeline', () => {
       { maxBatchSize: 1, flushIntervalMs: 60_000, capacity: 10, overflow: 'dropOldest' },
       {
         store,
+        notifier: { async notify() {} },
         redactor: {
           redact(values) {
             return { ...values, password: '[REDACTED]' }
@@ -326,7 +330,7 @@ test.group('AuditPipeline', () => {
     )
   })
 
-  test('emits flushed, dropped, and dead letter events', async ({ assert }) => {
+  test('emits dropped and dead letter events', async ({ assert }) => {
     const { emitter, emitted } = createEmitter()
     const { store } = createFakeStore()
     const pipeline = createPipeline(store, { capacity: 1, overflow: 'dropNew', emitter })
@@ -335,9 +339,9 @@ test.group('AuditPipeline', () => {
     pipeline.enqueue(event('b'))
     await pipeline.shutdown()
 
-    assert.includeMembers(
+    assert.include(
       emitted.map((entry) => entry.event),
-      ['audit:dropped', 'audit:flushed']
+      'audit:dropped'
     )
 
     const deadLetterEmitter = createEmitter()
@@ -351,5 +355,94 @@ test.group('AuditPipeline', () => {
       deadLetterEmitter.emitted.map((entry) => entry.event),
       'audit:dead_letter'
     )
+  })
+  test('keeps shutdown open until an active delayed flush succeeds', async ({ assert }) => {
+    const { promise: released, resolve } = Promise.withResolvers<void>()
+    let writes = 0
+    const store: AuditStoreContract = {
+      async write(batch) {
+        writes++
+        await released
+        return batch.map((queued, index) => ({
+          ...queued,
+          seq: index + 1,
+          hash: `hash-${queued.id}`,
+          prevHash: '0'.repeat(64),
+        }))
+      },
+      async head() {
+        return null
+      },
+      async *verify() {},
+      async prune() {
+        return { streams: [], totalPruned: 0, perEvent: {} }
+      },
+    }
+    const pipeline = createPipeline(store, { maxBatchSize: 1 })
+
+    await pipeline.enqueue(event('a'))
+    const shutdown = pipeline.shutdown(1)
+    let complete = false
+    void shutdown.then(() => {
+      complete = true
+    })
+
+    await sleep(10)
+    assert.equal(writes, 1)
+    assert.isFalse(complete)
+
+    resolve()
+    await shutdown
+    assert.equal(pipeline.stats().written, 1)
+  })
+
+  test('applies block overflow as sustained asynchronous backpressure', async ({ assert }) => {
+    const { promise: firstWrite, resolve } = Promise.withResolvers<void>()
+    const writes: string[] = []
+    let first = true
+    const store: AuditStoreContract = {
+      async write(batch) {
+        writes.push(...batch.map((queued) => queued.id))
+        if (first) {
+          first = false
+          await firstWrite
+        }
+        return batch.map((queued, index) => ({
+          ...queued,
+          seq: index + 1,
+          hash: `hash-${queued.id}`,
+          prevHash: '0'.repeat(64),
+        }))
+      },
+      async head() {
+        return null
+      },
+      async *verify() {},
+      async prune() {
+        return { streams: [], totalPruned: 0, perEvent: {} }
+      },
+    }
+    const pipeline = createPipeline(store, {
+      capacity: 1,
+      maxBatchSize: 1,
+      overflow: 'block',
+    })
+
+    await pipeline.enqueue(event('a'))
+    const second = pipeline.enqueue(event('b'))
+    let admitted = false
+    void second.then((accepted) => {
+      admitted = accepted
+    })
+
+    await sleep(10)
+    assert.isFalse(admitted)
+    assert.deepEqual(writes, ['a'])
+
+    resolve()
+    assert.isTrue(await second)
+    await pipeline.shutdown()
+    assert.deepEqual(writes, ['a', 'b'])
+    assert.equal(pipeline.stats().dropped, 0)
   })
 })

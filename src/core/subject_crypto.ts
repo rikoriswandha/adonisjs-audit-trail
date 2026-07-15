@@ -1,8 +1,10 @@
 import { randomBytes } from 'node:crypto'
 import { Encryption } from '@adonisjs/core/encryption'
 import { AES256GCM } from '@adonisjs/core/encryption/drivers/aes_256_gcm'
+import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
 import type { ApplicationService } from '@adonisjs/core/types'
 import type { AuditEvent, CryptoShreddingConfig, SubjectKeyStore } from '../types.js'
+import { canonicalJson } from './canonical_json.js'
 import { AuditConfigurationError } from './errors.js'
 
 const ENCRYPTED_MARKER = '_encrypted'
@@ -11,15 +13,17 @@ const CIPHERTEXT_KEY = 'ciphertext'
 export class MemorySubjectKeyStore implements SubjectKeyStore {
   readonly #keys = new Map<string, string>()
 
-  async get(subjectId: string): Promise<string | null> {
+  async get(subjectId: string, _client?: TransactionClientContract): Promise<string | null> {
     return this.#keys.get(subjectId) ?? null
   }
 
-  async set(subjectId: string, key: string): Promise<void> {
-    this.#keys.set(subjectId, key)
+  async set(subjectId: string, key: string, _client?: TransactionClientContract): Promise<void> {
+    if (!this.#keys.has(subjectId)) {
+      this.#keys.set(subjectId, key)
+    }
   }
 
-  async delete(subjectId: string): Promise<void> {
+  async delete(subjectId: string, _client?: TransactionClientContract): Promise<void> {
     this.#keys.delete(subjectId)
   }
 }
@@ -35,8 +39,8 @@ export class LucidSubjectKeyStore implements SubjectKeyStore {
     this.#app = options.app
   }
 
-  async get(subjectId: string): Promise<string | null> {
-    const db = await this.#db()
+  async get(subjectId: string, client?: TransactionClientContract): Promise<string | null> {
+    const db = client ?? (await this.#db())
     const row = await db
       .query()
       .select('key')
@@ -46,17 +50,17 @@ export class LucidSubjectKeyStore implements SubjectKeyStore {
     return row?.key ?? null
   }
 
-  async set(subjectId: string, key: string): Promise<void> {
-    const db = await this.#db()
+  async set(subjectId: string, key: string, client?: TransactionClientContract): Promise<void> {
+    const db = client ?? (await this.#db())
     await db
       .table(this.#table)
       .insert({ subject_id: subjectId, key })
       .onConflict('subject_id')
-      .merge()
+      .ignore()
   }
 
-  async delete(subjectId: string): Promise<void> {
-    const db = await this.#db()
+  async delete(subjectId: string, client?: TransactionClientContract): Promise<void> {
+    const db = client ?? (await this.#db())
     await db.query().from(this.#table).where('subject_id', subjectId).delete()
   }
 
@@ -73,7 +77,7 @@ export class LucidSubjectKeyStore implements SubjectKeyStore {
 export interface SubjectCryptoConfig {
   fields: string[]
   keyStore: SubjectKeyStore
-  subjectResolver?: (event: AuditEvent) => string | null
+  subjectResolver?: (event: AuditEvent) => string | null | Promise<string | null>
 }
 
 export class SubjectCrypto {
@@ -83,16 +87,19 @@ export class SubjectCrypto {
     this.#config = config
   }
 
-  async encrypt(event: AuditEvent): Promise<AuditEvent> {
-    const subjectId = this.#resolveSubject(event)
+  async encrypt(event: AuditEvent, client?: TransactionClientContract): Promise<AuditEvent> {
+    const subjectId = await this.#resolveSubject(event)
     if (!subjectId) {
       return event
     }
 
-    let key = await this.#config.keyStore.get(subjectId)
+    let key = await this.#config.keyStore.get(subjectId, client)
     if (!key) {
-      key = this.#generateKey()
-      await this.#config.keyStore.set(subjectId, key)
+      await this.#config.keyStore.set(subjectId, this.#generateKey(), client)
+      key = await this.#config.keyStore.get(subjectId, client)
+      if (!key) {
+        throw new AuditConfigurationError(`Subject key creation failed for "${subjectId}"`)
+      }
     }
 
     const encryption = this.#createEncryption(key)
@@ -105,13 +112,13 @@ export class SubjectCrypto {
     }
   }
 
-  async decrypt(event: AuditEvent): Promise<AuditEvent> {
-    const subjectId = this.#resolveSubject(event)
+  async decrypt(event: AuditEvent, client?: TransactionClientContract): Promise<AuditEvent> {
+    const subjectId = await this.#resolveSubject(event)
     if (!subjectId) {
       return event
     }
 
-    const key = await this.#config.keyStore.get(subjectId)
+    const key = await this.#config.keyStore.get(subjectId, client)
     if (!key) {
       return {
         ...event,
@@ -132,16 +139,16 @@ export class SubjectCrypto {
     }
   }
 
-  #resolveSubject(event: AuditEvent): string | null {
+  async #resolveSubject(event: AuditEvent): Promise<string | null> {
     if (this.#config.subjectResolver) {
-      return this.#config.subjectResolver(event)
+      return await this.#config.subjectResolver(event)
     }
 
-    if (event.actor.type === 'user' && event.actor.id) {
-      return event.actor.id
+    if (!event.actor.id) {
+      return null
     }
 
-    return null
+    return canonicalJson(['audit-subject', event.tenantId, event.actor.type, event.actor.id])
   }
 
   #generateKey(): string {

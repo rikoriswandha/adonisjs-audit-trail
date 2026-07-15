@@ -1,3 +1,9 @@
+import type { HttpContext } from '@adonisjs/core/http'
+import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
+import type { QueryClientContract, TransactionClientContract } from '@adonisjs/lucid/types/database'
+import type Audit from './models/audit.js'
+import type { AuditQuery } from './models/audit.js'
+
 // --- Actor ---
 export type ActorType = 'user' | 'system' | 'job' | 'cli' | (string & {})
 
@@ -5,6 +11,15 @@ export interface AuditActor {
   type: ActorType
   id: string | null
   label?: string | null
+}
+
+export interface AuditActorReference {
+  id: string | number | null
+  type?: ActorType
+  constructor?: {
+    name?: string
+    auditActorType?: ActorType
+  }
 }
 
 // --- Events ---
@@ -38,10 +53,20 @@ export interface ChainedAuditEvent extends AuditEvent {
 // --- Store contract ---
 export interface AuditStoreContract {
   write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]>
-  head(stream: string): Promise<{ seq: number; hash: string } | null>
-  verify(stream: string, range?: { fromSeq?: number; toSeq?: number }): AsyncIterable<VerifyReport>
+  head(stream: string, options?: AuditReadOptions): Promise<{ seq: number; hash: string } | null>
+  verify(
+    stream: string,
+    range?: { fromSeq?: number; toSeq?: number },
+    options?: AuditReadOptions
+  ): AsyncIterable<VerifyReport>
   prune(policy: ResolvedRetentionPolicy): Promise<PruneReport>
-  query?(filters: AuditQueryFilters): Promise<ChainedAuditEvent[]>
+  query?(filters: AuditQueryFilters, options?: AuditReadOptions): Promise<ChainedAuditEvent[]>
+  listStreams?(options?: AuditReadOptions): Promise<string[]>
+  resolveSequenceHash?(
+    stream: string,
+    seq: number,
+    options?: AuditReadOptions
+  ): Promise<string | null>
   /**
    * Optional support for selecting a named connection for an operation.
    * Returns a store instance bound to the given connection.
@@ -53,9 +78,6 @@ export interface AuditStoreContract {
 export type GuaranteeMode = 'best-effort' | 'request-coupled' | 'transactional-outbox'
 export type OverflowStrategy = 'dropOldest' | 'dropNew' | 'block'
 export type RedactionMode = 'mask' | 'remove' | 'hash'
-
-import type { ApplicationService, ConfigProvider } from '@adonisjs/core/types'
-import type { HttpContext } from '@adonisjs/core/http'
 
 export type AuditStoreFactory = (application: ApplicationService) => Promise<AuditStoreContract>
 
@@ -79,7 +101,6 @@ export interface AuditConfig<
     archive?: (segment: RetentionSegment) => Promise<void>
   }
   chain?: {
-    enabled?: boolean
     streamBy?: 'global' | 'tenant' | ((event: AuditEvent) => string)
     anchor?: AnchorConfig
   }
@@ -90,10 +111,35 @@ export interface AuditConfig<
     capacity?: number
     overflow?: OverflowStrategy
   }
+  outbox?: AuditOutboxConfig
   payloadMaxBytes?: number
 
   tenantResolver?: (ctx: HttpContext) => string | null | Promise<string | null>
   captureAuthEvents?: boolean
+}
+
+export interface AuditOutboxConfig {
+  connection?: string
+  table?: string
+  executor?: <T>(
+    tenantId: string | null,
+    operation: (transaction: TransactionClientContract) => Promise<T>
+  ) => Promise<T>
+  maxAttempts?: number
+  retryDelayMs?: number
+  staleClaimMs?: number
+}
+
+export interface AuditReadOptions {
+  connection?: string
+  client?: QueryClientContract
+}
+
+export type AuditSubmissionSource = 'domain' | 'model' | 'auth'
+
+export interface AuditSubmissionOptions {
+  transaction?: TransactionClientContract
+  source?: AuditSubmissionSource
 }
 
 // --- Module augmentation point ---
@@ -114,7 +160,8 @@ export interface AuditQueryFilters {
   fromCreatedAt?: string
   toCreatedAt?: string
   limit?: number
-  cursor?: number // seq-based cursor
+  /** Exclusive sequence cursor. Results have `seq > cursor`, never an offset. */
+  cursor?: number
 }
 
 export interface VerifyReport {
@@ -140,16 +187,16 @@ export interface AnchorConfig {
 }
 
 export interface SubjectKeyStore {
-  get(subjectId: string): Promise<string | null>
-  set(subjectId: string, key: string): Promise<void>
-  delete(subjectId: string): Promise<void>
+  get(subjectId: string, client?: TransactionClientContract): Promise<string | null>
+  set(subjectId: string, key: string, client?: TransactionClientContract): Promise<void>
+  delete(subjectId: string, client?: TransactionClientContract): Promise<void>
 }
 
 export interface CryptoShreddingConfig {
   enabled: boolean
   fields: string[]
   keyStore: SubjectKeyStore
-  subjectResolver?: (event: AuditEvent) => string | null
+  subjectResolver?: (event: AuditEvent) => string | null | Promise<string | null>
 }
 
 export interface PruneReport {
@@ -187,7 +234,7 @@ export interface AuditDeadLetterEvent {
 export interface AuditErrorEvent {
   event: AuditEvent | null
   error: unknown
-  source: 'model' | 'domain' | 'auth'
+  source: AuditSubmissionSource
 }
 
 export interface AuditRuntimeEvents {
@@ -213,6 +260,8 @@ export interface ResolvedRetentionPolicy extends RetentionPolicy {
 }
 
 export interface RetentionSegment {
+  /** Stable archive idempotency key derived from the stream and sequence range. */
+  idempotencyKey: string
   event: string
   stream: string
   fromSeq: number
@@ -230,6 +279,11 @@ export interface AuditableModelConfig {
   tags?: string[]
   snapshot?: 'diff' | 'full'
   strict?: boolean
+}
+
+export interface AuditableModelInstance {
+  audits(): AuditQuery
+  lastAudit(): Promise<Audit | null>
 }
 
 // Container bindings augmentation

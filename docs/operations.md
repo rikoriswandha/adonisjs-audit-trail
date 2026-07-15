@@ -84,7 +84,6 @@ export default defineConfig({
     lucid: stores.lucid({
       connection: 'audit',
       table: 'audits',
-      enforceImmutability: true,
     }),
   },
 })

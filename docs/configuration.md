@@ -13,7 +13,6 @@ export default defineConfig({
     lucid: stores.lucid({
       connection: 'audit',
       table: 'audits',
-      enforceImmutability: true,
     }),
 
     siem: stores.stream({
@@ -31,7 +30,7 @@ export default defineConfig({
   redaction: {
     global: ['password', 'token', '*.secret'],
     mode: 'mask',
-    salt: process.env.AUDIT_REDACTION_SALT,
+    saltEnvVar: 'AUDIT_REDACTION_SALT',
   },
 
   retention: {
@@ -40,7 +39,6 @@ export default defineConfig({
   },
 
   chain: {
-    enabled: true,
     streamBy: 'tenant',
   },
 
@@ -59,13 +57,14 @@ export default defineConfig({
 
 | Option          | Type                                                    | Default                                  | Description |
 | --------------- | ------------------------------------------------------- | ---------------------------------------- | ----------- |
-| `default`       | `string`                                                | `'lucid'`                                | Name of the default store to use. |
+| `default`       | `keyof stores`                                         | `'lucid'`                                | Name of the default store to use. |
 | `guarantee`     | `'best-effort' \| 'request-coupled' \| 'transactional-outbox'` | `'best-effort'`                          | Default delivery guarantee. |
-| `stores`        | `Record<string, AuditStoreFactory>`                     | *(required)*                             | Store driver definitions. |
-| `redaction`     | `RedactionConfig`                                       | `{ mode: 'mask' }`                       | Global redaction rules. |
-| `retention`     | `RetentionConfig`                                       | `{ default: '730 days' }`                | Retention policy for `audit:prune`. |
-| `chain`         | `ChainConfig`                                           | `{ enabled: true, streamBy: 'global' }`  | Hash-chain settings. |
-| `queue`         | `QueueConfig`                                           | `{ maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' }` | In-memory pipeline settings. |
+| `stores`        | `Record<string, AuditStoreFactory \| ConfigProvider>`  | *(required)*                             | Store driver definitions. |
+| `redaction`     | `AuditConfig['redaction']`                             | `{ mode: 'mask' }`                       | Global redaction rules. |
+| `retention`     | `AuditConfig['retention']`                             | `{ default: '730 days' }`                | Retention policy for `audit:prune`. |
+| `chain`         | `AuditConfig['chain']`                                 | `{ streamBy: 'global' }`                 | Hash-chain stream and anchor settings. |
+| `queue`         | `AuditConfig['queue']`                                 | `{ maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' }` | In-memory pipeline settings. |
+| `outbox`        | `AuditOutboxConfig`                                    | `{ table: 'audit_outbox' }`              | Source outbox connection, table, executor, and retry settings. |
 | `payloadMaxBytes` | `number`                                              | `32_768`                                 | Max size of `old_values`/`new_values`/`metadata` before truncation. |
 
 ## Environment variables

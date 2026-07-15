@@ -60,14 +60,41 @@ test.group('AuditContext', () => {
           id: () => 'request-1',
           ip: () => '127.0.0.1',
           header: () => undefined,
-          url: () => '/posts',
+          url: () => '/posts?access_token=secret',
           method: () => 'GET',
         },
       } as unknown as HttpContext
 
       await middleware.handle(ctx, async () => {
         assert.equal(auditContext.get()?.tenantId, 'tenant-1')
+        assert.equal(auditContext.get()?.url, '/posts')
       })
+    } finally {
+      await cleanupTestApp(app)
+    }
+  })
+
+  test('middleware rejects malformed tenant IDs from generated resolvers', async ({ assert }) => {
+    const app = await createTestApp({
+      tenantResolver: () => ' tenant-1 ',
+    })
+
+    try {
+      const middleware = new AuditContextMiddleware(app)
+      const ctx = {
+        request: {
+          id: () => 'request-1',
+          ip: () => '127.0.0.1',
+          header: () => undefined,
+          url: () => '/posts',
+          method: () => 'GET',
+        },
+      } as unknown as HttpContext
+
+      await assert.rejects(
+        () => middleware.handle(ctx, async () => {}),
+        /tenantResolver must return/
+      )
     } finally {
       await cleanupTestApp(app)
     }

@@ -2,6 +2,7 @@ import type { HttpContext } from '@adonisjs/core/http'
 import type { ApplicationService } from '@adonisjs/core/types'
 import type { NextFn } from '@adonisjs/http-server/types'
 import { auditContext } from '../audit_context.js'
+import { AuditConfigurationError } from '../core/errors.js'
 import type { AuditActor } from '../types.js'
 import app from '@adonisjs/core/services/app'
 
@@ -52,14 +53,23 @@ export default class AuditContextMiddleware {
 
   async handle(ctx: HttpContext, next: NextFn) {
     const config = await (this.#app ?? app).container.make('audit.config')
-    const tenantId = (await config.tenantResolver?.(ctx)) ?? undefined
+    const resolvedTenantId = config.tenantResolver ? await config.tenantResolver(ctx) : null
+    if (
+      resolvedTenantId !== null &&
+      (typeof resolvedTenantId !== 'string' ||
+        resolvedTenantId.length === 0 ||
+        resolvedTenantId.trim() !== resolvedTenantId)
+    ) {
+      throw new AuditConfigurationError('tenantResolver must return a non-empty, trimmed tenant ID')
+    }
+    const tenantId = resolvedTenantId ?? undefined
 
     return auditContext.run(
       {
         requestId: ctx.request.id(),
         ip: ctx.request.ip(),
         userAgent: ctx.request.header('user-agent')?.slice(0, 512),
-        url: ctx.request.url(true).slice(0, 2048),
+        url: ctx.request.url().replace(/\?.*$/, '').slice(0, 2048),
         httpMethod: ctx.request.method(),
         correlationId: ctx.request.header('x-correlation-id') ?? ctx.request.id(),
         actor: async () => resolveActorFromAuth(ctx),

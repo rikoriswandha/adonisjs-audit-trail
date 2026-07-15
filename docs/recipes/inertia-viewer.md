@@ -50,7 +50,7 @@ export default class AuditsController {
   async index({ request, inertia }: HttpContext) {
     const page = request.input('page', 1)
     const audits = await Audit.query()
-      .forModel(request.input('type'), request.input('id'))
+      .apply((scopes) => scopes.forRef(String(request.input('type')), String(request.input('id'))))
       .orderBy('seq', 'desc')
       .paginate(page, 25)
 

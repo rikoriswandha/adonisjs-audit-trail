@@ -114,3 +114,21 @@ export class AuditDroppedError extends Error {
     this.name = 'AuditDroppedError'
   }
 }
+
+export class AuditTransactionRequiredError extends Error {
+  code = 'E_AUDIT_TRANSACTION_REQUIRED' as const
+
+  constructor(message = 'Transactional audit delivery requires a caller-owned transaction') {
+    super(message)
+    this.name = 'AuditTransactionRequiredError'
+  }
+}
+
+export class AuditOutboxIntegrityError extends Error {
+  code = 'E_AUDIT_OUTBOX_INTEGRITY' as const
+
+  constructor(message = 'Audit outbox event conflicts with an existing event ID') {
+    super(message)
+    this.name = 'AuditOutboxIntegrityError'
+  }
+}

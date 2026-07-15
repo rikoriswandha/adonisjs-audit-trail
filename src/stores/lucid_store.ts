@@ -2,6 +2,7 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import type { QueryClientContract, TransactionClientContract } from '@adonisjs/lucid/types/database'
 import type {
   AuditEvent,
+  AuditReadOptions,
   AuditQueryFilters,
   AuditStoreContract,
   ChainedAuditEvent,
@@ -12,6 +13,8 @@ import type {
 import type { LucidStoreOptions } from '../define_config.js'
 import { chainBatch, GENESIS, hashEntry } from '../core/hash_chain.js'
 import { parseDuration } from '../core/retention.js'
+import { canonicalJson } from '../core/canonical_json.js'
+import { AuditOutboxIntegrityError, AuditStoreError } from '../core/errors.js'
 
 interface Row {
   id: string
@@ -100,45 +103,124 @@ function rowToChainedEvent(row: Row): ChainedAuditEvent {
   }
 }
 
+function auditEventFingerprint(event: AuditEvent): string {
+  const {
+    id,
+    event: name,
+    stream,
+    auditableType,
+    auditableId,
+    oldValues,
+    newValues,
+    metadata,
+  } = event
+  const createdAt = new Date(event.createdAt)
+  return canonicalJson({
+    id,
+    event: name,
+    stream,
+    auditableType,
+    auditableId,
+    oldValues,
+    newValues,
+    metadata,
+    actor: {
+      type: event.actor.type,
+      id: event.actor.id,
+      label: event.actor.label ?? null,
+    },
+    tenantId: event.tenantId,
+    requestId: event.requestId,
+    correlationId: event.correlationId,
+    ipAddress: event.ipAddress,
+    userAgent: event.userAgent,
+    url: event.url,
+    httpMethod: event.httpMethod,
+    tags: event.tags,
+    schemaVersion: event.schemaVersion,
+    createdAt: Number.isNaN(createdAt.getTime()) ? event.createdAt : createdAt.toISOString(),
+  })
+}
+
 export default class LucidStore implements AuditStoreContract {
   #app: ApplicationService
   #connection?: string
   #table: string
+  #maintenance?: (trx: TransactionClientContract) => Promise<void>
 
   constructor(app: ApplicationService, opts: LucidStoreOptions = {}) {
     this.#app = app
     this.#connection = opts.connection
     this.#table = opts.table ?? 'audits'
+    this.#maintenance = opts.maintenance
   }
 
   withConnection(connection: string): AuditStoreContract {
     return new LucidStore(this.#app, {
       connection,
       table: this.#table,
+      maintenance: this.#maintenance,
     })
   }
 
   async write(batch: AuditEvent[]): Promise<ChainedAuditEvent[]> {
+    if (batch.length === 0) return []
+
+    const db = await this.#db()
+    const ids = Array.from(new Set(batch.map((event) => event.id)))
+    const existingRows = (await db.query().from(this.#table).whereIn('id', ids)) as Row[]
+    const existing = new Map(existingRows.map((row) => [row.id, rowToChainedEvent(row)]))
+    const incoming = new Map<string, AuditEvent>()
     const byStream = new Map<string, AuditEvent[]>()
+    const results = new Map<string, ChainedAuditEvent>()
 
     for (const event of batch) {
+      const duplicate = incoming.get(event.id)
+      if (duplicate && auditEventFingerprint(duplicate) !== auditEventFingerprint(event)) {
+        throw new AuditOutboxIntegrityError(
+          `Audit event ${event.id} has conflicting duplicate payloads`
+        )
+      }
+      incoming.set(event.id, event)
+
+      const stored = existing.get(event.id)
+      if (stored) {
+        if (auditEventFingerprint(stored) !== auditEventFingerprint(event)) {
+          throw new AuditOutboxIntegrityError(
+            `Audit event ${event.id} conflicts with the target store`
+          )
+        }
+        results.set(event.id, stored)
+        continue
+      }
+
+      if (duplicate) continue
       const events = byStream.get(event.stream) ?? []
       events.push(event)
       byStream.set(event.stream, events)
     }
 
-    const results: ChainedAuditEvent[] = []
-
     for (const [stream, events] of byStream) {
       const chained = await this.#writeStream(stream, events)
-      results.push(...chained)
+      for (const event of chained) {
+        results.set(event.id, event)
+      }
     }
 
-    return results
+    return batch.map((event) => {
+      const result = results.get(event.id)
+      if (!result) {
+        throw new AuditOutboxIntegrityError(`Audit event ${event.id} was not persisted`)
+      }
+      return result
+    })
   }
 
-  async head(stream: string): Promise<{ seq: number; hash: string } | null> {
-    const db = await this.#db()
+  async head(
+    stream: string,
+    options?: AuditReadOptions
+  ): Promise<{ seq: number; hash: string } | null> {
+    const db = await this.#db(options)
     const rows = (await db
       .query()
       .from(this.#table)
@@ -148,37 +230,71 @@ export default class LucidStore implements AuditStoreContract {
     const row = rows[0]
     return row ? { seq: Number(row.seq), hash: row.hash } : null
   }
+  async listStreams(options?: AuditReadOptions): Promise<string[]> {
+    const db = await this.#db(options)
+    const rows = (await db
+      .query()
+      .select('stream')
+      .from(this.#table)
+      .groupBy('stream')
+      .orderBy('stream', 'asc')) as { stream: string }[]
+    return rows.map((row) => row.stream)
+  }
 
   async *verify(
     stream: string,
-    range?: { fromSeq?: number; toSeq?: number }
+    range?: { fromSeq?: number; toSeq?: number },
+    options?: AuditReadOptions
   ): AsyncGenerator<VerifyReport> {
-    const db = await this.#db()
+    const db = await this.#db(options)
     const pageSize = 500
     const fromSeq = range?.fromSeq ?? 1
-    let lastSeq = fromSeq - 1
     let prevSeq = 0
     let prevHash = GENESIS
     let checked = 0
     let firstInvalidSeq: number | undefined
 
-    if (fromSeq > 1) {
-      const headRows = (await db
+    const precedingRows = (await db
+      .query()
+      .select('seq', 'hash')
+      .from(this.#table)
+      .where('stream', stream)
+      .andWhere('seq', '<', fromSeq)
+      .orderBy('seq', 'desc')
+      .limit(1)) as Row[]
+
+    const preceding = precedingRows[0]
+    if (preceding) {
+      prevSeq = Number(preceding.seq)
+      prevHash = preceding.hash
+    } else {
+      const firstLiveRows = (await db
         .query()
-        .select('seq', 'hash')
+        .select('seq')
         .from(this.#table)
         .where('stream', stream)
-        .andWhere('seq', '<', fromSeq)
-        .orderBy('seq', 'desc')
+        .orderBy('seq', 'asc')
         .limit(1)) as Row[]
+      const firstLive = firstLiveRows[0]
 
-      const head = headRows[0]
-      if (head) {
-        prevSeq = Number(head.seq)
-        prevHash = head.hash
+      if (firstLive) {
+        const checkpointRows = (await db
+          .query()
+          .select('seq', 'hash')
+          .from('audit_chain_checkpoints')
+          .where('stream', stream)
+          .andWhere('seq', '<', Number(firstLive.seq))
+          .orderBy('seq', 'desc')
+          .limit(1)) as Row[]
+        const checkpoint = checkpointRows[0]
+        if (checkpoint) {
+          prevSeq = Number(checkpoint.seq)
+          prevHash = checkpoint.hash
+        }
       }
     }
 
+    let lastSeq = prevSeq
     while (true) {
       let query = db
         .query()
@@ -230,6 +346,25 @@ export default class LucidStore implements AuditStoreContract {
     }
   }
 
+  async resolveSequenceHash(
+    stream: string,
+    seq: number,
+    options?: AuditReadOptions
+  ): Promise<string | null> {
+    const db = await this.#db(options)
+    for (const table of [this.#table, 'audit_archive_events', 'audit_chain_checkpoints']) {
+      const rows = (await db
+        .query()
+        .select('hash')
+        .from(table)
+        .where('stream', stream)
+        .andWhere('seq', seq)
+        .limit(1)) as { hash: string }[]
+      if (rows[0]) return rows[0].hash
+    }
+    return null
+  }
+
   async prune(policy: ResolvedRetentionPolicy): Promise<PruneReport> {
     const db = await this.#db()
     const dialect = db.dialect.name
@@ -243,80 +378,123 @@ export default class LucidStore implements AuditStoreContract {
     }[]
 
     for (const { stream } of streamRows) {
-      streams.add(stream)
-
-      const eventTypes = (await db
+      const rows = (await db
         .query()
-        .select('event')
         .from(this.#table)
         .where('stream', stream)
-        .groupBy('event')) as { event: string }[]
+        .orderBy('seq', 'asc')) as Row[]
 
-      const filteredEventTypes = policy.eventFilter
-        ? eventTypes.filter(({ event }) => event === policy.eventFilter)
-        : eventTypes
+      if (rows.length < 2) continue
+      const first = rows[0]
+      if (!first || (policy.eventFilter !== undefined && first.event !== policy.eventFilter))
+        continue
 
-      for (const { event } of filteredEventTypes) {
-        const duration = policy.perEvent?.[event] ?? policy.default
+      const candidates: Row[] = []
+      for (const row of rows.slice(0, -1)) {
+        if (
+          row.event !== first.event ||
+          (policy.eventFilter !== undefined && row.event !== policy.eventFilter)
+        ) {
+          break
+        }
+
+        const duration = policy.perEvent?.[row.event] ?? policy.default
         const cutoff = new Date(now - parseDuration(duration)).toISOString()
+        if (toIsoString(row.created_at) >= cutoff) break
+        candidates.push(row)
+      }
 
-        const headRows = (await db
-          .query()
-          .select('seq')
-          .from(this.#table)
-          .where('stream', stream)
-          .orderBy('seq', 'desc')
-          .limit(1)) as { seq: number | string }[]
+      if (candidates.length === 0) continue
+      streams.add(stream)
+      const count = candidates.length
+      const event = first.event
 
-        const headSeq = headRows[0] ? Number(headRows[0].seq) : undefined
-
-        let candidateQuery = db
-          .query()
-          .select('id', 'seq', 'created_at')
-          .from(this.#table)
-          .where('stream', stream)
-          .andWhere('event', event)
-          .andWhere('created_at', '<', toDbTimestamp(cutoff, dialect))
-
-        if (headSeq !== undefined) {
-          candidateQuery = candidateQuery.andWhere('seq', '<', headSeq)
-        }
-
-        const candidates = (await candidateQuery.orderBy('seq', 'asc')) as {
-          id: string
-          seq: number
-          created_at: string
-        }[]
-
-        const count = candidates.length
-
-        if (count === 0) {
-          continue
-        }
-
-        if (policy.dryRun) {
-          totalPruned += count
-          perEvent[event] = (perEvent[event] ?? 0) + count
-          continue
-        }
-
-        if (policy.archive) {
-          await policy.archive({
-            fromSeq: Number(candidates[0].seq),
-            toSeq: Number(candidates[count - 1].seq),
-            count,
-            fromCreatedAt: toIsoString(candidates[0].created_at),
-            toCreatedAt: toIsoString(candidates[count - 1].created_at),
-            event,
-            stream,
-          })
-        }
-
-        const ids = candidates.map((row) => row.id)
-        await db.query().from(this.#table).whereIn('id', ids).delete()
+      if (policy.dryRun) {
         totalPruned += count
         perEvent[event] = (perEvent[event] ?? 0) + count
+        continue
       }
+
+      if (!this.#maintenance) {
+        throw new Error(
+          'Physical audit pruning requires a LucidStore maintenance operation configured for this store'
+        )
+      }
+
+      const from = candidates[0]!
+      const to = candidates[candidates.length - 1]!
+      const segment = {
+        idempotencyKey: `${stream}:${Number(from.seq)}:${Number(to.seq)}`,
+        fromSeq: Number(from.seq),
+        toSeq: Number(to.seq),
+        count,
+        fromCreatedAt: toIsoString(from.created_at),
+        toCreatedAt: toIsoString(to.created_at),
+        event,
+        stream,
+      }
+      const ids = candidates.map((row) => row.id)
+      const candidateById = new Map(candidates.map((row) => [row.id, row]))
+      const archivedRows = (await db
+        .query()
+        .select('id', 'stream', 'seq', 'hash', 'prev_hash')
+        .from('audit_archive_events')
+        .whereIn('id', ids)) as Pick<Row, 'id' | 'stream' | 'seq' | 'hash' | 'prev_hash'>[]
+      const archivedIds = new Set(archivedRows.map((row) => row.id))
+
+      for (const archived of archivedRows) {
+        const source = candidateById.get(archived.id)
+        if (
+          !source ||
+          source.stream !== archived.stream ||
+          Number(source.seq) !== Number(archived.seq) ||
+          source.hash !== archived.hash ||
+          source.prev_hash !== archived.prev_hash
+        ) {
+          throw new Error(`Archived audit event ${archived.id} conflicts with the live audit event`)
+        }
+      }
+
+      if (archivedIds.size !== ids.length) {
+        if (policy.archive) await policy.archive(segment)
+
+        const missing = candidates
+          .filter((row) => !archivedIds.has(row.id))
+          .map((row) => ({
+            id: row.id,
+            stream: row.stream,
+            seq: Number(row.seq),
+            hash: row.hash,
+            prev_hash: row.prev_hash,
+            created_at: row.created_at,
+          }))
+        await db.insertQuery().table('audit_archive_events').multiInsert(missing)
+      }
+
+      await db.transaction(async (trx) => {
+        await this.#acquireLock(trx, stream, dialect)
+        try {
+          await this.#maintenance!(trx)
+          await trx.query().from(this.#table).whereIn('id', ids).delete()
+          await trx
+            .insertQuery()
+            .table('audit_chain_checkpoints')
+            .insert({
+              stream,
+              seq: Number(to.seq),
+              hash: to.hash,
+              created_at: to.created_at,
+            })
+          if (isSqlite(dialect)) {
+            await trx.query().from('audit_maintenance_guard').where('operation', 'prune').delete()
+          }
+        } finally {
+          await this.#releaseLock(trx, stream, dialect)
+        }
+      })
+
+      totalPruned += count
+      perEvent[event] = (perEvent[event] ?? 0) + count
     }
 
     return {
@@ -326,8 +504,11 @@ export default class LucidStore implements AuditStoreContract {
     }
   }
 
-  async query(filters: AuditQueryFilters): Promise<ChainedAuditEvent[]> {
-    const db = await this.#db()
+  async query(
+    filters: AuditQueryFilters,
+    options?: AuditReadOptions
+  ): Promise<ChainedAuditEvent[]> {
+    const db = await this.#db(options)
     const dialect = db.dialect.name
     let query = db.query().from(this.#table)
 
@@ -367,15 +548,19 @@ export default class LucidStore implements AuditStoreContract {
     }
 
     const limit = filters.limit ?? 100
-    const offset = filters.cursor ?? 0
+    if (filters.cursor !== undefined) {
+      query = query.where('seq', '>', filters.cursor)
+    }
 
-    const rows = (await query.orderBy('seq', 'asc').limit(limit).offset(offset)) as Row[]
+    const rows = (await query.orderBy('seq', 'asc').limit(limit)) as Row[]
     return rows.map(rowToChainedEvent)
   }
 
-  async #db(): Promise<QueryClientContract> {
+  async #db(options?: AuditReadOptions): Promise<QueryClientContract> {
+    if (options?.client) return options.client
     const db = await this.#app.container.make('lucid.db')
-    return this.#connection ? db.connection(this.#connection) : db.connection()
+    const connection = options?.connection ?? this.#connection
+    return connection ? db.connection(connection) : db.connection()
   }
 
   async #writeStream(stream: string, events: AuditEvent[]): Promise<ChainedAuditEvent[]> {
@@ -447,7 +632,12 @@ export default class LucidStore implements AuditStoreContract {
     }
 
     if (dialect === 'mysql2' || dialect === 'mysql') {
-      await db.rawQuery('SELECT GET_LOCK(?, 5)', [stream])
+      const response = await db.rawQuery('SELECT GET_LOCK(?, 5) AS lock_status', [stream])
+      if (response[0]?.[0]?.lock_status !== 1) {
+        throw new AuditStoreError(
+          `Could not acquire MySQL advisory lock for audit stream "${stream}"`
+        )
+      }
       return
     }
 

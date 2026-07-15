@@ -6,20 +6,40 @@
 import { BaseSchema } from '@adonisjs/lucid/schema'
 
 export default class extends BaseSchema {
-  protected tableName = 'audit_outbox'
+  protected tableName = '{{ outboxTable }}'
+
+  {{#if outboxConnection}}
+  // Run this source migration with: node ace migration:run --connection={{ outboxConnection }}
+  {{/if}}
 
   async up() {
+    const usesSQLite =
+      this.db.dialect.name === 'sqlite3' ||
+      this.db.dialect.name === 'better-sqlite3' ||
+      this.db.dialect.name === 'libsql'
+    const timestampNow = usesSQLite ? this.now() : this.now(3)
     this.schema.createTable(this.tableName, (table) => {
-      table.increments('id').primary()
+      table.uuid('id').primary()
       table.jsonb('payload').notNullable()
-      table.integer('attempts').notNullable().defaultTo(0)
+      table.string('tenant_id', 64).nullable()
+      table.string('status', 16).notNullable().defaultTo('pending')
+      table.integer('attempts').unsigned().notNullable().defaultTo(0)
+      table
+        .timestamp('available_at', { useTz: true, precision: 3 })
+        .notNullable()
+        .defaultTo(timestampNow)
       table.timestamp('claimed_at', { useTz: true, precision: 3 }).nullable()
       table.timestamp('processed_at', { useTz: true, precision: 3 }).nullable()
-      table.timestamp('created_at', { useTz: true, precision: 3 }).notNullable()
+      table.timestamp('failed_at', { useTz: true, precision: 3 }).nullable()
+      table.text('last_error').nullable()
+      table
+        .timestamp('created_at', { useTz: true, precision: 3 })
+        .notNullable()
+        .defaultTo(timestampNow)
       table.timestamp('updated_at', { useTz: true, precision: 3 }).nullable()
 
-      table.index(['processed_at', 'claimed_at'])
-      table.index(['created_at'])
+      table.index(['status', 'available_at'])
+      table.index(['status', 'tenant_id', 'available_at'])
     })
   }
 
