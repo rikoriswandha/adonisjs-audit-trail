@@ -253,6 +253,97 @@ export type ConsumerAuditableModel = AuditableModelInstance
 export const consumerArtifacts = { Auditable, Audit }
 EOF
 }
+write_outbox_consumer_command() {
+  local consumer_dir="$1"
+
+  mkdir -p "$consumer_dir/commands"
+  cat > "$consumer_dir/commands/audit_outbox_consumer_smoke.ts" <<'EOF'
+import { BaseCommand } from '@adonisjs/core/ace'
+
+type OutboxIntent = {
+  id: unknown
+  payload: unknown
+  status: unknown
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function parsePayload(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value)) {
+    return value
+  }
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function payloadEventId(value: unknown): unknown {
+  const payload = parsePayload(value)
+  return isRecord(payload?.event) ? payload.event.id : undefined
+}
+
+function isUuidV7(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+}
+
+export default class AuditOutboxConsumerSmoke extends BaseCommand {
+  static commandName = 'audit:outbox-consumer-smoke'
+  static description = 'Assert transactional outbox rows are application-identified'
+  static options = { startApp: true as const }
+
+  async run() {
+    const audit = await this.app.container.make('audit')
+    const db = await this.app.container.make('lucid.db')
+    const event = await audit.assemble({
+      event: 'consumer.outbox.smoke',
+      metadata: { source: 'packed-consumer-harness' },
+    })
+
+    await db.transaction(async (transaction) => {
+      await audit.submit(event, { transaction })
+    })
+
+    const pending = (await db
+      .from('audit_outbox')
+      .select(['id', 'payload', 'status'])
+      .where('status', 'pending')) as OutboxIntent[]
+    const matching = pending.filter((intent) => payloadEventId(intent.payload) === event.id)
+
+    if (matching.length !== 1) {
+      throw new Error(
+        `Expected exactly one pending outbox intent for event ${event.id}, found ${matching.length}`
+      )
+    }
+
+    const intent = matching[0]!
+    if (intent.status !== 'pending') {
+      throw new Error(`Expected pending outbox intent status, found ${String(intent.status)}`)
+    }
+    if (!isUuidV7(intent.id)) {
+      throw new Error(`Expected outbox row id to be a UUIDv7, found ${String(intent.id)}`)
+    }
+    if (intent.id === event.id) {
+      throw new Error('Outbox row id must be distinct from its payload event id')
+    }
+
+    this.logger.success(`Validated pending outbox intent ${intent.id}`)
+  }
+}
+EOF
+}
+
 
 assert_configured_artifacts() {
   local consumer_dir="$1"
@@ -323,6 +414,8 @@ configure_consumer() {
   )
 
   assert_configured_artifacts "$consumer_dir"
+  write_outbox_consumer_command "$consumer_dir"
+
 
   info "Compiling public API and generated configuration for $dialect"
   (
@@ -339,6 +432,8 @@ configure_consumer() {
       fi
       exit 1
     fi
+    E2E_DATABASE_URL="$database_url" node ace audit:outbox-consumer-smoke
+    E2E_DATABASE_URL="$database_url" node ace audit:replay-outbox
     E2E_DATABASE_URL="$database_url" node ace audit:stats
     E2E_DATABASE_URL="$database_url" node ace audit:verify --json
   )

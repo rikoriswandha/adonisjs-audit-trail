@@ -5,6 +5,7 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import { defineConfig, stores } from '../../src/define_config.js'
 import type { ResolvedAuditConfig } from '../../src/define_config.js'
 import type { AuditStoreContract, AuditStoreFactory } from '../../src/types.js'
+import { AuditConfigurationError } from '../../src/core/errors.js'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
 
 const memoryStore = function (): AuditStoreContract {
@@ -91,6 +92,65 @@ test.group('defineConfig', function (group) {
       overflow: 'dropOldest',
     })
     assert.equal(resolved.payloadMaxBytes, 32_768)
+    assert.isTrue(resolved.captureAuthEvents)
+  })
+
+  test('keeps automatic auth capture enabled for request-coupled delivery', async function ({
+    assert,
+  }) {
+    const provider = defineConfig({
+      stores: {
+        memory: memoryFactory,
+      },
+      default: 'memory',
+      guarantee: 'request-coupled',
+    })
+
+    const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
+      memory: typeof memoryFactory
+    }>
+
+    assert.isTrue(resolved.captureAuthEvents)
+  })
+
+  test('disables automatic auth capture by default for transactional outbox delivery', async function ({
+    assert,
+  }) {
+    const provider = defineConfig({
+      stores: {
+        memory: memoryFactory,
+      },
+      default: 'memory',
+      guarantee: 'transactional-outbox',
+    })
+
+    const resolved = (await configProvider.resolve(app, provider)) as ResolvedAuditConfig<{
+      memory: typeof memoryFactory
+    }>
+
+    assert.equal(resolved.guarantee, 'transactional-outbox')
+    assert.isFalse(resolved.captureAuthEvents)
+  })
+
+  test('rejects automatic auth capture with transactional outbox delivery', async function ({
+    assert,
+  }) {
+    const provider = defineConfig({
+      stores: {
+        memory: memoryFactory,
+      },
+      default: 'memory',
+      guarantee: 'transactional-outbox',
+      captureAuthEvents: true,
+    })
+
+    const resolution = configProvider.resolve(app, provider)
+
+    await assert.rejects(() => resolution, AuditConfigurationError)
+    await assert.rejects(
+      () => resolution,
+      /automatic auth listener events lack caller-owned transactions.*captureAuthEvents: false.*explicit transaction-bound audit event/i
+    )
   })
 
   test('store helpers resolve store instances', async function ({ assert }) {

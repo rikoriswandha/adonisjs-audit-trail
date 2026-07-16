@@ -109,6 +109,16 @@ export default defineConfig({
 
   /**
    * Automatically capture auth login/logout events.
+   * {{#if outbox}}
+   * Disabled in transactional-outbox mode because auth listener payloads do not
+   * include a caller-owned transaction. Capture these explicitly with
+   * audit.log('auth.login').withTransaction(trx).commit() instead.
+   * {{/if}}
    */
+  {{#if outbox}}
+  captureAuthEvents: false,
+  {{/if}}
+  {{#if !outbox}}
   captureAuthEvents: true,
+  {{/if}}
 })

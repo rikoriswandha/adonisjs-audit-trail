@@ -12,6 +12,7 @@ import type AuditPipeline from '../core/pipeline.js'
 import type { AssembleConfig, AssembleInput } from '../core/assembler.js'
 import { assembleEvent } from '../core/assembler.js'
 import { AuditDroppedError, AuditTransactionRequiredError } from '../core/errors.js'
+import { uuidv7 } from '../core/uuidv7.js'
 import LogBuilder from './log_builder.js'
 
 export type AuditSubmissionSource = 'domain' | 'model' | 'auth'
@@ -103,6 +104,7 @@ export default class AuditService {
           .insertQuery()
           .table(this.config.outbox?.table ?? 'audit_outbox')
           .insert({
+            id: uuidv7(),
             payload: JSON.stringify({ event }),
             tenant_id: event.tenantId,
             status: 'pending',

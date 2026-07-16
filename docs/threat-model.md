@@ -5,7 +5,7 @@
 | App-level row tampering | Read-only Lucid model + DB immutability trigger + INSERT-only grants | A privileged DBA can bypass triggers/grants. |
 | DBA/attacker edits rows | Hash chain breaks; `audit:verify` detects the first modified row | Whole-suffix truncation requires anchoring to detect. |
 | Suffix truncation (delete newest rows) | Periodic external anchoring of chain head | Anchors must be stored outside the same database. |
-| Lost events on crash | Graceful-shutdown flush; `transactional-outbox` for atomicity | Process hard-kill can still lose in-memory best-effort events. |
+| Lost events on crash | Graceful-shutdown flush; `transactional-outbox` commits a durable source intent with the business change | Process hard-kill can still lose in-memory best-effort events; outbox target delivery remains asynchronous. |
 | Audit of audit access | Optional `audit.viewed` events emitted by repository reads | Must be enabled by the application. |
 | PII leakage in trails | Field-level redaction modes; crypto-shredding for erasure | Misconfigured model `redact` arrays can leak data. |
 | Clock skew breaking order | `seq` is the order key; timestamps are informational | — |

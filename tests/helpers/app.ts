@@ -114,6 +114,9 @@ function resolveAuditConfig(auditConfig: Partial<AuditConfig>): TestAuditConfig 
     },
     stores: (auditConfig.stores ?? defaultAuditConfig.stores) as Record<string, unknown>,
     default: String(auditConfig.default ?? defaultAuditConfig.default),
+    captureAuthEvents:
+      auditConfig.captureAuthEvents ??
+      (auditConfig.guarantee ?? defaultAuditConfig.guarantee) !== 'transactional-outbox',
   }
 }
 

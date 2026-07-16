@@ -13,7 +13,7 @@ Capture who changed what, when, and from where — automatically for Lucid model
 Most AdonisJS auditing solutions stop at "who changed this row". `@rikology/adonisjs-audit-trail` is designed for environments where **the log is evidence**:
 
 - **Tamper-evident by default** — every record is linked into a per-stream SHA-256 hash chain; modification breaks every successor.
-- **Never blocks the request path** — asynchronous, batched pipeline with configurable delivery guarantees.
+- **Guarantee-aware delivery** — best-effort delivery is asynchronous; request-coupled waits for a flush; transactional outbox durably records source intent in the caller-owned business transaction before asynchronous delivery.
 - **Pluggable storage** — SQL, NDJSON stream, HTTP collector, or fanout.
 - **Compliance-aware** — field-level redaction, retention policies, GDPR crypto-shredding, multi-tenancy.
 - **Native v7 integration** — provider, configure flow, middleware, transformer stub, and Ace commands.
@@ -93,6 +93,21 @@ import audit from '@rikology/adonisjs-audit-trail/services/main'
 await audit.log('invoice.approved').on(invoice).withMeta({ level: 2 }).commit()
 ```
 
+### Auth event capture and transactional outbox
+
+Auth emitter capture (`captureAuthEvents`) remains enabled by default for `best-effort` and `request-coupled` delivery. It defaults to disabled for `transactional-outbox`, and setting it to `true` in that mode is rejected: framework emitter payloads do not carry the caller-owned business transaction that fail-closed outbox submission requires.
+
+When an auth-related audit intent must commit atomically with business state, record it explicitly at that operation's transaction boundary:
+
+```ts
+await db.transaction(async (trx) => {
+  // Make the auth-related business-state change with trx.
+  await audit.log('auth.login').withTransaction(trx).commit()
+})
+```
+
+This writes the durable source intent in `trx`; the outbox drainer still delivers the final audit record asynchronously.
+
 ### 5. Query the trail
 
 ```ts
@@ -116,7 +131,7 @@ Exit code is non-zero when a chain break is detected, so it can be wired into CI
 - **Automatic** model auditing via a Lucid mixin.
 - **Explicit** domain events via a fluent API.
 - **Tamper-evident** SHA-256 hash chains with `node ace audit:verify`.
-- **Asynchronous, batched write pipeline** that never blocks the request path.
+- **Guarantee-aware delivery** — best-effort writes are asynchronous, request-coupled writes await a flush, and transactional outbox commits source intent with the caller-owned business transaction before asynchronous delivery.
 - **Three delivery guarantees**: `best-effort`, `request-coupled`, and `transactional-outbox`.
 - **Pluggable stores**: SQL (Lucid), NDJSON stream, HTTP collector, or fanout.
 - **PII-aware** redaction, masking, hashing, and crypto-shredding support.

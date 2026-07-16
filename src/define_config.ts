@@ -79,6 +79,15 @@ export function defineConfig<
   KnownStores extends Record<string, AuditStoreFactory | ConfigProvider<AuditStoreContract>>,
 >(config: AuditConfig<KnownStores>): ConfigProvider<ResolvedAuditConfig<KnownStores>> {
   return configProvider.create(async (app) => {
+    const guarantee = config.guarantee ?? 'best-effort'
+    const captureAuthEvents = config.captureAuthEvents ?? guarantee !== 'transactional-outbox'
+
+    if (guarantee === 'transactional-outbox' && config.captureAuthEvents === true) {
+      throw new AuditConfigurationError(
+        'Automatic auth event capture is incompatible with the "transactional-outbox" guarantee: automatic auth listener events lack caller-owned transactions. Set captureAuthEvents: false or emit an explicit transaction-bound audit event instead.'
+      )
+    }
+
     const resolvedStores = {} as Record<string, AuditStoreContract>
     const fanoutEntries: { name: string; provider: FanoutConfigProvider }[] = []
 
@@ -106,7 +115,7 @@ export function defineConfig<
 
     return {
       default: defaultStore,
-      guarantee: config.guarantee ?? 'best-effort',
+      guarantee,
       stores: resolvedStores as ResolvedAuditConfig<KnownStores>['stores'],
       redaction: {
         global: config.redaction?.global ?? [],
@@ -143,7 +152,7 @@ export function defineConfig<
         ...(config.outbox?.executor !== undefined ? { executor: config.outbox.executor } : {}),
       },
       tenantResolver: config.tenantResolver,
-      captureAuthEvents: config.captureAuthEvents ?? true,
+      captureAuthEvents,
     }
   })
 }

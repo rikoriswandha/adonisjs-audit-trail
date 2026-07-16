@@ -65,7 +65,25 @@ export default defineConfig({
 | `chain`         | `AuditConfig['chain']`                                 | `{ streamBy: 'global' }`                 | Hash-chain stream and anchor settings. |
 | `queue`         | `AuditConfig['queue']`                                 | `{ maxBatchSize: 200, flushIntervalMs: 250, capacity: 10_000, overflow: 'dropOldest' }` | In-memory pipeline settings. |
 | `outbox`        | `AuditOutboxConfig`                                    | `{ table: 'audit_outbox' }`              | Source outbox connection, table, executor, and retry settings. |
+| `captureAuthEvents` | `boolean`                                             | `true` except `false` for `'transactional-outbox'` | Subscribe to automatic auth emitter events. In `transactional-outbox` mode it must remain `false`; setting it to `true` is rejected. |
 | `payloadMaxBytes` | `number`                                              | `32_768`                                 | Max size of `old_values`/`new_values`/`metadata` before truncation. |
+
+## Auth emitter capture
+
+`captureAuthEvents` controls automatic capture from the AdonisJS auth event emitter. It defaults to `true` in `best-effort` and `request-coupled` modes, preserving request-coupled and best-effort capture unless you explicitly set it to `false`.
+
+Transactional outbox is different: it defaults to `false`, and `captureAuthEvents: true` is an invalid configuration. Auth emitter payloads do not include the caller-owned business transaction needed to persist an outbox intent fail-closed. Enabling the listener would therefore promise an atomicity guarantee it cannot keep.
+
+For an auth-related operation that requires atomic audit intent, emit the event explicitly inside the business transaction instead:
+
+```ts
+await db.transaction(async (trx) => {
+  // Perform the auth-related business write with trx.
+  await audit.log('auth.login').withTransaction(trx).commit()
+})
+```
+
+The explicit event joins `trx`; the outbox drainer delivers it to the target audit store asynchronously after commit.
 
 ## Environment variables
 

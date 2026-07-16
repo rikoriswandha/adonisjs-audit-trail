@@ -8,6 +8,8 @@ import { auditContext } from '../../src/audit_context.js'
 
 type ReportedError = { event: string; source: string }
 
+const uuidV7Pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 function createFakePipeline(enqueueReturns: boolean): AuditPipeline {
   return {
     enqueue: async () => enqueueReturns,
@@ -52,18 +54,27 @@ function createService(
   })
 }
 
-function createTransaction(inserted: {
-  table?: string
-  payload?: Record<string, unknown>
-}): TransactionClientContract {
+interface InsertedOutboxRow {
+  table: string
+  payload: {
+    id?: string
+    payload?: string
+    status?: string
+    attempts?: number
+  }
+}
+
+function createTransaction(inserted: InsertedOutboxRow[]): TransactionClientContract {
   return {
     insertQuery() {
       return {
         table(table: string) {
-          inserted.table = table
           return {
             async insert(payload: Record<string, unknown>) {
-              inserted.payload = payload
+              inserted.push({
+                table,
+                payload: payload as InsertedOutboxRow['payload'],
+              })
             },
           }
         },
@@ -130,19 +141,31 @@ test.group('AuditService delivery guarantees', () => {
     )
   })
 
-  test('transactional-outbox explicit events write one intent on the supplied transaction', async ({
+  test('transactional-outbox events allocate distinct UUIDv7 row identities', async ({
     assert,
   }) => {
-    const inserted: { table?: string; payload?: Record<string, unknown> } = {}
+    const inserted: InsertedOutboxRow[] = []
     const service = createService('transactional-outbox', createFakePipeline(true))
     const transaction = createTransaction(inserted)
 
-    await auditContext.run({}, () =>
-      service.log('user.login').withTransaction(transaction).commit()
-    )
+    await auditContext.run({}, async () => {
+      await service.log('user.login').withTransaction(transaction).commit()
+      await service.log('user.login').withTransaction(transaction).commit()
+    })
 
-    assert.equal(inserted.table, 'audit_outbox')
-    assert.equal(inserted.payload?.status, 'pending')
-    assert.equal(inserted.payload?.attempts, 0)
+    assert.lengthOf(inserted, 2)
+    assert.equal(inserted[0].table, 'audit_outbox')
+    assert.equal(inserted[0].payload.status, 'pending')
+    assert.equal(inserted[0].payload.attempts, 0)
+
+    const rowIds = inserted.map((row) => String(row.payload.id))
+    assert.match(rowIds[0], uuidV7Pattern)
+    assert.match(rowIds[1], uuidV7Pattern)
+    assert.notEqual(rowIds[0], rowIds[1])
+
+    for (const row of inserted) {
+      const serializedEvent = JSON.parse(String(row.payload.payload)) as { event: { id: string } }
+      assert.notEqual(row.payload.id, serializedEvent.event.id)
+    }
   })
 })

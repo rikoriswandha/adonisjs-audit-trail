@@ -44,9 +44,12 @@ export function Auditable<T extends NormalizeConstructor<typeof BaseModel>>(supe
       if (registered.has(this)) return
 
       registered.add(this)
-      this.before('update', (model) => {
+      this.before('create', preflightTransactionalOutbox)
+      this.before('update', async (model) => {
+        await preflightTransactionalOutbox(model)
         updateSnapshots.set(model, buildUpdateSnapshot(model))
       })
+      this.before('delete', preflightTransactionalOutbox)
       this.after('create', (model) => captureModelEvent('created', model))
       this.after('update', (model) => captureUpdateEvent(model))
       this.after('delete', (model) => captureModelEvent('deleted', model))
@@ -149,8 +152,20 @@ async function emitWithGuarantee(
       source: 'model',
     })
   } catch (error) {
-    if (!model.$trx || emission.strict || error instanceof AuditTransactionRequiredError)
+    if (
+      config.guarantee === 'transactional-outbox' ||
+      !model.$trx ||
+      emission.strict ||
+      error instanceof AuditTransactionRequiredError
+    )
       throw error
+  }
+}
+
+async function preflightTransactionalOutbox(model: LucidRow): Promise<void> {
+  const config = await app.container.make('audit.config')
+  if (config.guarantee === 'transactional-outbox' && !model.$trx) {
+    throw new AuditTransactionRequiredError()
   }
 }
 

@@ -8,6 +8,27 @@ import { withDatabases } from '../helpers/matrix.js'
 import { Post } from '../helpers/models.js'
 import AuditOutboxDrainer from '../../src/core/outbox_drainer.js'
 import type { SuccessfulDeliveryNotifier } from '../../src/core/successful_delivery_notifier.js'
+import { AuditTransactionRequiredError } from '../../src/core/errors.js'
+
+const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function decodeOutboxPayload(payload: unknown): { event: AuditEvent } {
+  const decoded: unknown = typeof payload === 'string' ? JSON.parse(payload) : payload
+
+  if (
+    !decoded ||
+    typeof decoded !== 'object' ||
+    !('event' in decoded) ||
+    !decoded.event ||
+    typeof decoded.event !== 'object' ||
+    !('id' in decoded.event) ||
+    typeof decoded.event.id !== 'string'
+  ) {
+    throw new TypeError('Outbox payload does not contain an audit event')
+  }
+
+  return decoded as { event: AuditEvent }
+}
 
 function createSlowStore(base: AuditStoreContract, delayMs: number): AuditStoreContract {
   return {
@@ -110,11 +131,65 @@ withDatabases('Auditable transactions', (_group, dialect) => {
       const outboxRows = await db.query().from('audit_outbox').whereNull('processed_at')
       assert.lengthOf(outboxRows, 1)
 
+      const [outboxRow] = outboxRows
+      const payload = decodeOutboxPayload(outboxRow?.payload)
+      assert.isNotNull(outboxRow?.id, 'outbox row has an ID')
+      assert.match(String(outboxRow?.id), UUID_V7_PATTERN, 'outbox row ID is UUIDv7')
+      assert.notEqual(String(outboxRow?.id), payload.event.id, 'row and event IDs are distinct')
+
       const drainer = await app.container.make('audit.outbox_drainer')
       assert.equal(await drainer.drain(), 1)
 
       const row = await Audit.query().where('event', 'model.created').firstOrFail()
       assert.equal(row.newValues?.title, 'Outbox')
+    } finally {
+      await cleanupTestApp(app)
+    }
+  })
+
+  test('transactional-outbox intent failures roll back business data with default model strictness', async ({
+    assert,
+  }) => {
+    const app = await createLucidApp(dialect, {
+      guarantee: 'transactional-outbox',
+      outbox: { table: 'missing_audit_outbox' },
+    })
+
+    try {
+      const db = await app.container.make('lucid.db')
+
+      await assert.rejects(() =>
+        db.transaction(async (trx) => {
+          const post = new Post()
+          post.title = 'Outbox insert failure'
+          post.body = null
+          post.useTransaction(trx)
+          await post.save()
+        })
+      )
+
+      assert.lengthOf(await db.query().from('posts'), 0, 'business row rolled back')
+      assert.lengthOf(await db.query().from('audit_outbox'), 0, 'no outbox row persisted')
+    } finally {
+      await cleanupTestApp(app)
+    }
+  })
+
+  test('transactional-outbox model creates require a caller transaction before persistence', async ({
+    assert,
+  }) => {
+    const app = await createLucidApp(dialect, { guarantee: 'transactional-outbox' })
+
+    try {
+      const db = await app.container.make('lucid.db')
+
+      await assert.rejects(
+        () => Post.create({ title: 'Missing transaction', body: null }),
+        AuditTransactionRequiredError
+      )
+
+      assert.lengthOf(await db.query().from('posts'), 0, 'business row was not inserted')
+      assert.lengthOf(await db.query().from('audit_outbox'), 0, 'outbox was not written')
     } finally {
       await cleanupTestApp(app)
     }

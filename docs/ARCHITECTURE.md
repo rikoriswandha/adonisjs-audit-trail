@@ -8,18 +8,20 @@
 
 ## 1. Executive Summary
 
-This document specifies the architecture for a production-grade audit trail library for AdonisJS v7. The goal is to go beyond "model change history" packages and deliver a system suitable for compliance-driven environments (SOC 2, ISO 27001, HIPAA, PCI-DSS, GDPR): tamper-evident, append-only, asynchronous, PII-aware, multi-storage, and fully type-safe.
+This document specifies the architecture for a production-grade audit trail library for AdonisJS v7. The goal is to go beyond "model change history" packages and deliver a system suitable for compliance-driven environments (SOC 2, ISO 27001, HIPAA, PCI-DSS, GDPR): tamper-evident, append-only, with asynchronous target delivery where selected, PII-aware, multi-storage, and fully type-safe.
 
 The library captures three classes of events:
 
 1. **Model events** — create/update/delete/restore on Lucid models (automatic, via a mixin).
-2. **HTTP/auth events** — logins, logouts, failed auth, permission denials, sensitive route access (via middleware + framework event listeners).
+2. **HTTP/auth events** — logins, logouts, failed auth, permission denials, sensitive route access (via middleware + framework event listeners in best-effort and request-coupled modes).
 3. **Domain events** — explicit, developer-emitted business events ("invoice approved", "report exported") via a fluent API.
+
+Automatic auth emitter capture is supported for best-effort and request-coupled delivery, where it defaults on. It is disabled by default and cannot be enabled for transactional outbox: emitter payloads lack the caller-owned business transaction required to persist source intent fail-closed. Auth-related intents that need that atomicity must be emitted explicitly with `audit.log(...).withTransaction(trx).commit()` at the business operation boundary.
 
 Core differentiators over existing community packages:
 
 - **Append-only with tamper evidence** (per-tenant SHA-256 hash chain, optional periodic anchoring).
-- **Asynchronous, batched write pipeline** with an outbox/transactional guarantee option, so auditing never blocks or breaks the request path.
+- **Guarantee-aware delivery pipeline** — best-effort delivery is asynchronous, request-coupled delivery can wait, and the outbox mode synchronously persists source intent in the caller-owned business transaction before asynchronous target delivery.
 - **Actor & context resolution via `AsyncLocalStorage`** — no need to thread `HttpContext` through model saves.
 - **Pluggable storage drivers** (Lucid/SQL, external sink like HTTP/S3/stream) behind a manager, mirroring AdonisJS's own manager/driver patterns (hash, drive, encryption).
 - **PII redaction & retention policies** as first-class config.
@@ -45,7 +47,7 @@ Recurring requirements from security/compliance literature:
 
 - **Immutability enforced at the data store**, not just in code — append-only tables, revoked UPDATE/DELETE grants, or WORM/object-lock storage for archived segments. Code-level guards alone leave a back door.
 - **Tamper evidence** via hash chaining: each entry's hash covers its canonicalized payload plus the previous entry's hash; altering any record breaks every subsequent hash. Optionally sign batches and anchor periodic chain roots externally.
-- **Asynchronous logging** so audit writes don't block the hot path; pair with an **outbox pattern + idempotency** to avoid losing entries on retries and to avoid dual-write divergence between entity tables and audit tables.
+- **Asynchronous target delivery where appropriate**, paired with an **outbox pattern + idempotency** to avoid losing source intent on retries and to avoid dual-write divergence between entity tables and audit tables.
 - **Ordering by server-assigned sequence**, not wall-clock timestamps (clock skew breaks ordering and chains).
 - **Separation of duties**: services that write audits should not be able to modify them; restrict reads.
 - **Plan for privacy and retention from day one**: redaction of sensitive fields, configurable retention, and a redaction strategy that doesn't break the hash chain (store hashes of redacted values, or use verifiable-redaction techniques).
@@ -72,7 +74,7 @@ Recurring requirements from security/compliance literature:
 - FR3: Automatic actor resolution (authenticated user via `ctx.auth`), plus system/CLI/job actor fallbacks.
 - FR4: Automatic context capture: request ID, IP, user agent, URL, route name, HTTP method, session ID, tenant ID.
 - FR5: Explicit domain-event API: `audit.log('invoice.approved').on(invoice).by(user).withMeta({...})`.
-- FR6: HTTP/auth event capture via listeners on `@adonisjs/auth` events and an optional route middleware for sensitive endpoints.
+- FR6: HTTP/auth event capture via listeners on `@adonisjs/auth` events and an optional route middleware for sensitive endpoints in best-effort and request-coupled modes. Transactional outbox uses explicit transaction-bound events instead.
 - FR7: Query API: fetch audits for a model instance, for an actor, by event type, by time range; cursor pagination.
 - FR8: Restore/inspect helpers: `audit.getModified()`, `audit.diff()`, optional "revert entity to this version".
 - FR9: Pluggable stores: `lucid` (default, SQL), `http` (ship to external collector), `stream` (NDJSON to file/stdout for SIEM ingestion), and a `fanout` composite.
@@ -84,8 +86,8 @@ Recurring requirements from security/compliance literature:
 
 ### 3.2 Non-functional
 
-- NFR1: **Zero hot-path blocking** — enqueue is in-memory O(1); flush is batched and off the request lifecycle. Target: < 0.2 ms overhead per audited model save.
-- NFR2: **No lost audits** under normal operation; configurable guarantee level (see §6.3): `best-effort`, `request-coupled`, `transactional-outbox`.
+- NFR1: **Best-effort hot-path efficiency** — enqueue is in-memory O(1); flush is batched and off the request lifecycle. Request-coupled and transactional-outbox modes deliberately add synchronous work for their guarantees. Target: < 0.2 ms overhead per best-effort audited model save.
+- NFR2: **Guarantee-specific loss semantics** — transactional-outbox durably records source intent when its caller-owned transaction commits; best-effort can lose buffered events, and request-coupled surfaces flush failures to the request.
 - NFR3: **Crash safety**: graceful shutdown flush hook; outbox replay on boot for `transactional-outbox` mode.
 - NFR4: Type safety end-to-end; no `any` in public API; generated event-name unions from user config.
 - NFR5: ESM-only, Node ≥ 24, peer deps: `@adonisjs/core@^7`, `@adonisjs/lucid@^22` (optional peer for the lucid store/mixin).
@@ -116,7 +118,7 @@ Recurring requirements from security/compliance literature:
                 └────────────────────────┬────────────────────────────┘
                                          ▼
                 ┌─────────────────────────────────────────────────────┐
-                │              Write Pipeline (async)                 │
+                │       Delivery Pipeline (target delivery async)      │
                 │  ring-buffer queue → batcher → hash-chainer         │
                 │  → guarantee strategy (best-effort / coupled /      │
                 │    outbox) → retry w/ backoff → DLQ hook            │
@@ -188,7 +190,7 @@ this.schema.createTable('audits', (table) => {
 
 ### 5.2 `audit_outbox` table (only for `transactional-outbox` mode)
 
-`id (auto-increment)`, `payload (jsonb)`, `attempts`, `claimed_at`, `processed_at`, `created_at`, `updated_at`. Rows are written inside the *same DB transaction* as the business change, then drained by the pipeline and moved into `audits` (where chaining happens). Survives process crashes.
+`id (application-generated UUIDv7, NOT NULL, distinct from payload event.id)`, `payload (jsonb)`, `attempts`, `claimed_at`, `processed_at`, `created_at`, `updated_at`. A durable source intent row is written inside the caller-owned transaction as the business change; the drainer later delivers it to `audits`, where chaining happens. The transaction is atomic only for the business data and source intent, not target delivery. Rows survive process crashes.
 
 ### 5.3 Canonical serialization (chain input)
 
@@ -274,9 +276,9 @@ The pipeline is a singleton bound in the container by the provider.
 |---|---|---|
 | `best-effort` (default) | Enqueue and return immediately; flush async. Graceful-shutdown hook flushes the buffer (v7 note: shutdown hooks run in reverse registration order — provider registers ours early so it flushes last). | High-volume, non-regulated events |
 | `request-coupled` | Response is held until the events from this request are flushed (await with timeout). | Moderate assurance without schema changes |
-| `transactional-outbox` | Audit rows written to `audit_outbox` in the *same transaction* as the model change (Lucid `$trx` detection in the mixin); drainer moves them into `audits`. Atomic with business data; crash-safe. | Regulated/financial flows |
+| `transactional-outbox` | Before model DML, the caller must bind the model with `model.useTransaction(trx)`. The mixin synchronously persists a durable source intent in that caller-owned transaction; an intent failure rejects and rolls back the transaction regardless of `auditConfig.strict`. A drainer delivers the intent to `audits` asynchronously. | Regulated/financial flows that require business data and audit source intent to commit together |
 
-The mixin auto-detects an active transaction on the model and, in outbox mode, joins it — eliminating the classic dual-write divergence.
+Transactional-outbox does not atomically deliver to the target store: only the business change and source intent share the caller-owned transaction.
 
 ### 6.4 `Auditable` mixin (Lucid)
 
@@ -291,7 +293,7 @@ export default class Invoice extends compose(BaseModel, Auditable) {
     exclude: ['updatedAt'],            // never diffed
     redact: ['iban'],                  // diffed as '[REDACTED]', hash stored for comparability
     tags: ['billing'],
-    strict: false,                     // true → throw if audit enqueue fails
+    strict: false,                     // controls non-outbox capture failures; transactional-outbox intent failures always reject
   }
 }
 ```
