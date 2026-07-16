@@ -6,6 +6,14 @@ This project adheres to [Semantic Versioning](https://semver.org/) and uses [Con
 
 ## Unreleased
 
+## [1.2.1](https://github.com/rikoriswandha/adonisjs-audit-trail/compare/v1.2.0...v1.2.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **outbox:** enforce atomic intent delivery ([b621183](https://github.com/rikoriswandha/adonisjs-audit-trail/commit/b621183a0d3dbb59f881dff140c0275b18857473))
+* **release:** persist generated changelog ([2220e49](https://github.com/rikoriswandha/adonisjs-audit-trail/commit/2220e492e73171cdeefe19da04698cf045e226fd))
+
 ## 1.2.0 - 2026-07-15
 
 ### Added
