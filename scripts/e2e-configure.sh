@@ -416,6 +416,19 @@ configure_consumer() {
   assert_configured_artifacts "$consumer_dir"
   write_outbox_consumer_command "$consumer_dir"
 
+  info "Rendering exported command help for $dialect"
+  (
+    cd "$consumer_dir"
+    for command in \
+      audit:verify \
+      audit:prune \
+      audit:replay-outbox \
+      audit:stats \
+      audit:forget; do
+      node ace "$command" --help >/dev/null
+    done
+  )
+
 
   info "Compiling public API and generated configuration for $dialect"
   (
@@ -435,7 +448,8 @@ configure_consumer() {
     E2E_DATABASE_URL="$database_url" node ace audit:outbox-consumer-smoke
     E2E_DATABASE_URL="$database_url" node ace audit:replay-outbox
     E2E_DATABASE_URL="$database_url" node ace audit:stats
-    E2E_DATABASE_URL="$database_url" node ace audit:verify --json
+    E2E_DATABASE_URL="$database_url" node ace audit:verify --from-seq=1 --to-seq=1 --json
+    E2E_DATABASE_URL="$database_url" node ace audit:prune --dry-run
   )
 }
 

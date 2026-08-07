@@ -119,6 +119,7 @@ function errorMessage(error: unknown): string {
 
 export default class AuditOutboxDrainer {
   #timer: ReturnType<typeof setInterval> | null = null
+  #activeScheduledDrain: Promise<void> | null = null
   #staleClaimMs: number
   #maxAttempts: number
   #retryDelayMs: number
@@ -146,15 +147,30 @@ export default class AuditOutboxDrainer {
   start(intervalMs = 1000): void {
     if (this.#timer) return
     this.#timer = setInterval(() => {
-      void this.drain()
+      this.#runScheduledDrain()
     }, intervalMs)
     this.#timer.unref()
   }
 
-  stop(): void {
-    if (!this.#timer) return
-    clearInterval(this.#timer)
-    this.#timer = null
+  async stop(): Promise<void> {
+    if (this.#timer) {
+      clearInterval(this.#timer)
+      this.#timer = null
+    }
+    await this.#activeScheduledDrain
+  }
+
+  #runScheduledDrain(): void {
+    if (this.#activeScheduledDrain) return
+
+    this.#activeScheduledDrain = this.drain()
+      .then(() => undefined)
+      .catch((error) => {
+        console.error(`Audit outbox scheduled drain failed: ${errorMessage(error)}`)
+      })
+      .finally(() => {
+        this.#activeScheduledDrain = null
+      })
   }
 
   async drain(limit = 100): Promise<number> {

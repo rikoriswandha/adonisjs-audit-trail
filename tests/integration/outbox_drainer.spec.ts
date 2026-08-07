@@ -115,6 +115,12 @@ async function createOutboxApp(dialect: DbDialect = 'sqlite') {
   return app
 }
 
+function delay(ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  setTimeout(resolve, ms)
+  return promise
+}
+
 withDatabases('Audit outbox drainer', (group, dialect) => {
   let app: ApplicationService
 
@@ -352,6 +358,95 @@ withDatabases('Audit outbox drainer', (group, dialect) => {
     assert.deepEqual(tenants, ['tenant-a', 'tenant-a'])
     if (dialect === 'postgres') {
       assert.deepEqual(transactionTenants, ['tenant-a', 'tenant-a'])
+    }
+  })
+
+  test('handles scheduled drain rejections and remains stoppable', async ({ assert }) => {
+    const event = makeOutboxEvent()
+    await insertOutboxRow(app, { event })
+    const target = createRecordingStore()
+    const { notifier } = createNotifier()
+    const { promise: errorLogged, resolve: markErrorLogged } = Promise.withResolvers<void>()
+    const originalConsoleError = console.error
+    const errors: string[] = []
+    const drainer = new AuditOutboxDrainer(
+      app,
+      target.store,
+      {
+        executor: async () => {
+          throw new Error('scheduled executor unavailable')
+        },
+      },
+      notifier
+    )
+
+    console.error = (...values: unknown[]) => {
+      const message = values.map(String).join(' ')
+      errors.push(message)
+      if (message.includes('scheduled executor unavailable')) {
+        markErrorLogged()
+      }
+    }
+
+    drainer.start(5)
+    try {
+      await errorLogged
+      await drainer.stop()
+      assert.include(errors.join('\n'), 'Audit outbox scheduled drain failed')
+      assert.include(errors.join('\n'), 'scheduled executor unavailable')
+    } finally {
+      console.error = originalConsoleError
+      await drainer.stop()
+    }
+  })
+  test('serializes scheduled drains and waits for the active drain during stop', async ({
+    assert,
+  }) => {
+    const event = makeOutboxEvent()
+    await insertOutboxRow(app, { event })
+    const target = createRecordingStore()
+    const { notifier } = createNotifier()
+    const db = await app.container.make('lucid.db')
+    let executorCalls = 0
+    const { promise: executorGate, resolve: releaseExecutor } = Promise.withResolvers<void>()
+    const { promise: executorEntered, resolve: markExecutorEntered } = Promise.withResolvers<void>()
+    const drainer = new AuditOutboxDrainer(
+      app,
+      target.store,
+      {
+        executor: async (_tenantId, operation) => {
+          executorCalls++
+          if (executorCalls === 1) {
+            markExecutorEntered()
+            await executorGate
+          }
+          return db.connection().transaction(operation)
+        },
+      },
+      notifier
+    )
+
+    drainer.start(5)
+    try {
+      await executorEntered
+      await delay(30)
+      assert.equal(executorCalls, 1)
+
+      let stopped = false
+      const stopping = drainer.stop().then(() => {
+        stopped = true
+      })
+      await delay(20)
+      assert.isFalse(stopped)
+
+      releaseExecutor()
+      await stopping
+      assert.isTrue(stopped)
+      assert.equal(executorCalls, 2)
+      assert.lengthOf(target.writes, 1)
+    } finally {
+      releaseExecutor()
+      await drainer.stop()
     }
   })
 })

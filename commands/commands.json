@@ -3,56 +3,75 @@
     {
       "commandName": "audit:verify",
       "description": "Verify audit trail hash chain integrity",
+      "help": "",
       "namespace": "audit",
       "aliases": [],
       "flags": [
         {
           "name": "stream",
+          "flagName": "stream",
+          "required": false,
           "type": "string",
           "description": "Stream to verify"
         },
         {
-          "name": "from-seq",
+          "name": "fromSeq",
+          "flagName": "from-seq",
+          "required": false,
           "type": "number",
           "description": "Start sequence (inclusive)"
         },
         {
-          "name": "to-seq",
+          "name": "toSeq",
+          "flagName": "to-seq",
+          "required": false,
           "type": "number",
           "description": "End sequence (inclusive)"
         },
         {
           "name": "json",
+          "flagName": "json",
+          "required": false,
           "type": "boolean",
           "description": "Output JSON"
         },
         {
-          "name": "check-anchors",
+          "name": "checkAnchors",
+          "flagName": "check-anchors",
+          "required": false,
           "type": "boolean",
           "description": "Check anchored chain heads against anchor file"
         }
       ],
+      "args": [],
       "options": { "startApp": true },
       "filePath": "./audit_verify.js"
     },
     {
       "commandName": "audit:prune",
       "description": "Prune audit events according to retention policy",
+      "help": "",
       "namespace": "audit",
       "aliases": [],
       "flags": [
         {
           "name": "event",
+          "flagName": "event",
+          "required": false,
           "type": "string",
           "description": "Event name to prune"
         },
         {
-          "name": "dry-run",
+          "name": "dryRun",
+          "flagName": "dry-run",
+          "required": false,
           "type": "boolean",
           "description": "Run without deleting (dry run)"
         },
         {
           "name": "connection",
+          "flagName": "connection",
+          "required": false,
           "type": "string",
           "description": "Store connection name (for stores that support it)"
         }
@@ -64,16 +83,21 @@
     {
       "commandName": "audit:replay-outbox",
       "description": "Replay pending transactional outbox events",
+      "help": "",
       "namespace": "audit",
       "aliases": [],
       "flags": [
         {
           "name": "limit",
+          "flagName": "limit",
+          "required": false,
           "type": "number",
           "description": "Maximum events to requeue and replay"
         },
         {
           "name": "requeue",
+          "flagName": "requeue",
+          "required": false,
           "type": "boolean",
           "description": "Return failed rows to pending before replaying"
         }
@@ -85,16 +109,21 @@
     {
       "commandName": "audit:stats",
       "description": "Show audit pipeline and store statistics",
+      "help": "",
       "namespace": "audit",
       "aliases": [],
       "flags": [
         {
           "name": "store",
+          "flagName": "store",
+          "required": false,
           "type": "string",
           "description": "Store name"
         },
         {
           "name": "stream",
+          "flagName": "stream",
+          "required": false,
           "type": "string",
           "description": "Stream name"
         }
@@ -106,19 +135,22 @@
     {
       "commandName": "audit:forget",
       "description": "Crypto-shred a data subject by deleting their encryption key",
+      "help": "",
       "namespace": "audit",
       "aliases": [],
       "flags": [
         {
           "name": "subject",
+          "flagName": "subject",
+          "required": true,
           "type": "string",
-          "description": "Data subject identifier",
-          "required": true
+          "description": "Data subject identifier"
         }
       ],
       "args": [],
       "options": { "startApp": true },
       "filePath": "./audit_forget.js"
     }
-  ]
+  ],
+  "version": 1
 }

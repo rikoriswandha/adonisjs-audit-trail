@@ -8,6 +8,7 @@ import Audit from '../../src/models/audit.js'
 import type AuditService from '../../src/services/audit.js'
 import type { AuditEvent } from '../../src/types.js'
 import { auditContext } from '../../src/audit_context.js'
+import AuditProvider from '../../providers/audit_provider.js'
 
 async function createLucidApp(dialect: string = 'sqlite', auditConfig = {}) {
   const app = await createTestApp(
@@ -51,6 +52,89 @@ function makeOutboxEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
     ...overrides,
   }
 }
+
+test.group('AuditProvider lifecycle', () => {
+  test('console applications run the initial outbox drain without starting the timer', async ({
+    assert,
+  }) => {
+    let drains = 0
+    let starts = 0
+    const drainer = {
+      drain: async () => {
+        drains++
+        return 0
+      },
+      start: () => {
+        starts++
+      },
+      stop: async () => {},
+    }
+    const pipeline = {
+      start: () => {},
+      shutdown: async () => {},
+    }
+    const bindings: Record<string, unknown> = {
+      'audit.config': { guarantee: 'transactional-outbox', captureAuthEvents: false },
+      'audit.outbox_drainer': drainer,
+      'audit.pipeline': pipeline,
+      'emitter': {},
+    }
+    const app = {
+      getEnvironment: () => 'console',
+      container: {
+        make: async (binding: string) => bindings[binding],
+      },
+    } as unknown as ApplicationService
+
+    await new AuditProvider(app).start()
+
+    assert.equal(drains, 1)
+    assert.equal(starts, 0)
+  })
+
+  test('web applications start the timer and shutdown awaits the drainer', async ({ assert }) => {
+    const { promise: activeDrain, resolve: finishDrain } = Promise.withResolvers<void>()
+    let starts = 0
+    let pipelineShutdown = false
+    const drainer = {
+      drain: async () => 0,
+      start: () => {
+        starts++
+      },
+      stop: async () => activeDrain,
+    }
+    const pipeline = {
+      start: () => {},
+      shutdown: async () => {
+        pipelineShutdown = true
+      },
+    }
+    const bindings: Record<string, unknown> = {
+      'audit.config': { guarantee: 'transactional-outbox', captureAuthEvents: false },
+      'audit.outbox_drainer': drainer,
+      'audit.pipeline': pipeline,
+      'emitter': {},
+    }
+    const app = {
+      getEnvironment: () => 'web',
+      container: {
+        make: async (binding: string) => bindings[binding],
+      },
+    } as unknown as ApplicationService
+    const provider = new AuditProvider(app)
+
+    await provider.start()
+    const shuttingDown = provider.shutdown()
+    await Promise.resolve()
+
+    assert.equal(starts, 1)
+    assert.isFalse(pipelineShutdown)
+
+    finishDrain()
+    await shuttingDown
+    assert.isTrue(pipelineShutdown)
+  })
+})
 
 withDatabases('AuditProvider', (group, dialect) => {
   let app: ApplicationService

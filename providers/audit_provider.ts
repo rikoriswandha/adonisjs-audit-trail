@@ -111,13 +111,15 @@ export default class AuditProvider {
     if (config.guarantee === 'transactional-outbox') {
       this.#outboxDrainer = await this.app.container.make('audit.outbox_drainer')
       await this.#outboxDrainer.drain()
-      this.#outboxDrainer.start()
+      if (this.app.getEnvironment() !== 'console') {
+        this.#outboxDrainer.start()
+      }
     }
   }
 
   async shutdown() {
     this.#authListener?.detach()
-    this.#outboxDrainer?.stop()
+    await this.#outboxDrainer?.stop()
     const pipeline = await this.app.container.make('audit.pipeline')
     await pipeline.shutdown(5000)
   }

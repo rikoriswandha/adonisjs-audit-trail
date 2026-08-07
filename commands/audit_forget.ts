@@ -6,6 +6,11 @@ export default class AuditForget extends BaseCommand {
   static description = 'Crypto-shred a data subject by deleting their encryption key'
   static options = { startApp: true as const }
 
+  static validate(parsedOutput: Parameters<typeof BaseCommand.validate>[0]): void {
+    if (parsedOutput.flags.help === true) return
+    super.validate(parsedOutput)
+  }
+
   @flags.string({ description: 'Data subject identifier', required: true })
   declare subject: string
 

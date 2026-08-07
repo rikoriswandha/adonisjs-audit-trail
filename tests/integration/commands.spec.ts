@@ -3,7 +3,7 @@ import type { ApplicationService } from '@adonisjs/core/types'
 import { Kernel } from '@adonisjs/core/ace'
 import type { BaseCommand } from '@adonisjs/core/ace'
 import type { TransactionClientContract } from '@adonisjs/lucid/types/database'
-import { mkdtempSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createTestApp, cleanupTestApp } from '../helpers/app.js'
@@ -20,6 +20,23 @@ import AuditReplayOutbox from '../../commands/audit_replay_outbox.js'
 import AuditForget from '../../commands/audit_forget.js'
 import { fileAppendPublisher } from '../../src/core/anchor.js'
 import { MemorySubjectKeyStore } from '../../src/core/subject_crypto.js'
+
+test.group('Audit command manifest', () => {
+  test('matches Ace 14 metadata serialized by every exported command', ({ assert }) => {
+    const manifest = JSON.parse(
+      readFileSync(new URL('../../commands/commands.json', import.meta.url), 'utf8')
+    )
+    const commands = [
+      { command: AuditVerify, filePath: './audit_verify.js' },
+      { command: AuditPrune, filePath: './audit_prune.js' },
+      { command: AuditReplayOutbox, filePath: './audit_replay_outbox.js' },
+      { command: AuditStats, filePath: './audit_stats.js' },
+      { command: AuditForget, filePath: './audit_forget.js' },
+    ].map(({ command, filePath }) => ({ ...command.serialize(), filePath }))
+
+    assert.deepEqual(manifest, { commands, version: 1 })
+  })
+})
 
 function privilegedMaintenance(dialect: string) {
   return async (trx: TransactionClientContract) => {
@@ -130,6 +147,22 @@ withDatabases('Audit commands', (group, dialect) => {
     assert.equal(command.exitCode, 0)
   })
 
+  test('audit:verify hydrates hyphenated sequence flags onto camelCase properties', async ({
+    assert,
+  }) => {
+    const audit = (await app.container.make('audit')) as AuditService
+    await audit.log('user.login').commitSync()
+
+    const command = (await runCommand(app, AuditVerify, [
+      '--from-seq=1',
+      '--to-seq=1',
+    ])) as AuditVerify
+
+    assert.equal(command.exitCode, 0)
+    assert.equal(command.fromSeq, 1)
+    assert.equal(command.toSeq, 1)
+  })
+
   test('audit:verify exits non-zero on a corrupted chain', async ({ assert }) => {
     await seedCorruptedRows(app)
 
@@ -158,6 +191,7 @@ withDatabases('Audit commands', (group, dialect) => {
 
     const command = await runCommand(app, AuditVerify, ['--check-anchors'])
     assert.equal(command.exitCode, 0)
+    assert.isTrue((command as AuditVerify).checkAnchors)
   })
 
   test('audit:verify detects a mismatched older anchor even when the current head differs', async ({
@@ -220,6 +254,7 @@ withDatabases('Audit commands', (group, dialect) => {
     const afterCount = await Audit.query().count('* as count')
 
     assert.equal(command.exitCode, 0)
+    assert.isTrue((command as AuditPrune).dryRun)
     assert.equal(beforeCount[0].$extras.count, afterCount[0].$extras.count)
   })
 
