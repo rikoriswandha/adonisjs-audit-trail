@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/) and uses [Con
 
 ## Unreleased
 
+## [1.2.3](https://github.com/rikoriswandha/adonisjs-audit-trail/compare/v1.2.1...v1.2.3) (2026-08-07)
+
+
+### Bug Fixes
+
+* support Ace 14 and safe outbox shutdown ([6e0bef5](https://github.com/rikoriswandha/adonisjs-audit-trail/commit/6e0bef54184f9f80871797ab5acb9411d73903b5))
+
 ## [1.2.1](https://github.com/rikoriswandha/adonisjs-audit-trail/compare/v1.2.0...v1.2.1) (2026-07-16)
 
 
