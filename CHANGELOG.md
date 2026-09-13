@@ -6,6 +6,13 @@ This project adheres to [Semantic Versioning](https://semver.org/) and uses [Con
 
 ## Unreleased
 
+## [1.2.4](https://github.com/rikoriswandha/adonisjs-audit-trail/compare/v1.2.3...v1.2.4) (2026-09-13)
+
+
+### Bug Fixes
+
+* **ci:** restore checks across supported platforms ([7f0bd48](https://github.com/rikoriswandha/adonisjs-audit-trail/commit/7f0bd488b95831600d3db7938c945c5ef45f8702))
+
 ## [1.2.3](https://github.com/rikoriswandha/adonisjs-audit-trail/compare/v1.2.1...v1.2.3) (2026-08-07)
 
 
